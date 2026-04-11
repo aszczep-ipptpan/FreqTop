@@ -1,5 +1,5 @@
 import numpy as np
-from base import TopOptSolver
+from .base import TopOptSolver
 
 
 class CantileverProblem(TopOptSolver):

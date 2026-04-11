@@ -13,8 +13,8 @@ import sys
 import matplotlib.pyplot as plt
 
 from FreqTop.utils.cantilever import CantileverProblem
-from FreqTop.utils.base import TopOptSolver
-from FreqTop.fe.solver import FESolver
+from FreqTop.solver import TopOptSolver
+from FreqTop.fe.fe_solver import FESolver
 from FreqTop.filters.sensitivity import SensitivityFilter
 from FreqTop.filters.density import DensityFilter
 from FreqTop.optimizers.oc import OCOptimizer
@@ -60,7 +60,7 @@ solver = TopOptSolver(
     optimizer = optimizer,
     volfrac   = volfrac,
     callbacks = (plotter, logger),
-    max_iter  = 2000,
+    max_iter  = 20,
     tol       = 0.01,
 )
 

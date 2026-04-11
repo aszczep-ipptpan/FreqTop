@@ -1,4 +1,4 @@
 from .elements import lk
-from .solver import FESolver
+from .fe_solver import FESolver
 
 __all__ = ["lk", "FESolver"]

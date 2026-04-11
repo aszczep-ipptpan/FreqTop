@@ -1,5 +1,5 @@
 import numpy as np
-from base import Callback
+from .base import Callback
 
 
 class ConsoleLogger(Callback):

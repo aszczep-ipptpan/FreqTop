@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
-from base import Callback
+from .base import Callback
 
 
 class LivePlotter(Callback):

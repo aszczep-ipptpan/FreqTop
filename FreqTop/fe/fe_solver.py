@@ -2,7 +2,7 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
-from .utils.base import TopOptSolver
+from ..utils.base import TopOptSolver
 from .elements import lk
 
 

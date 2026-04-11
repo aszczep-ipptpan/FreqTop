@@ -1,6 +1,6 @@
 import numpy as np
-from base import Filter
-from _matrix import build_filter_matrix
+from .base import Filter
+from ._matrix import build_filter_matrix
 
 
 class SensitivityFilter(Filter):
