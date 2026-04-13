@@ -21,6 +21,9 @@ class OCOptimizer(Optimizer):
         self.bisect_tol = bisect_tol
         self._g = 0.0  # Nguyen/Paulino internal state
 
+
+
+
     def update(
         self,
         x: np.ndarray,
@@ -28,28 +31,85 @@ class OCOptimizer(Optimizer):
         dv: np.ndarray,
         volfrac: float,
     ) -> np.ndarray:
-        n = len(x)
-        l1, l2 = 0.0, 1e9
-        move = self.move
-        xnew = np.zeros(n)
+        """Compute the OC update for the design variables.
 
-        while (l2 - l1) / (l1 + l2) > self.bisect_tol:
-            lmid = 0.5 * (l2 + l1)
-            xnew[:] = np.maximum(
-                0.0,
-                np.maximum(
-                    x - move,
-                    np.minimum(
-                        1.0,
-                        np.minimum(x + move, x * np.sqrt(-dc / dv / lmid)),
-                    ),
+        Parameters
+        ----------
+        x : np.ndarray, shape (nelx*nely,)
+            Current design variable vector.
+        dc : np.ndarray, shape (nelx*nely,)
+            Sensitivity of the objective function w.r.t. design variables.
+        dv : np.ndarray, shape (nelx*nely,)
+            Sensitivity of the volume constraint w.r.t. design variables.
+        volfrac : float
+            Target volume fraction (used to compute the constraint residual).   
+        """
+
+        self._g = np.sum(dv * (x - volfrac))
+        lmbda = self._find_lagrange_multiplier(x, dc, dv)
+        x_new = self._update_density(x, dc, dv, lmbda)
+        return x_new
+
+
+    # =========================
+    # AKTUALIZACJA ZMIENNYCH
+    # =========================
+    def _update_density(
+        self,
+        x: np.ndarray,
+        dc: np.ndarray,
+        dv: np.ndarray,
+        lmbda: float,
+    ) -> np.ndarray:
+        """Wzór OC:
+        x_new = x * sqrt(-dc / (dv * λ))
+        z ograniczeniami move i [0,1]
+        """
+        x_candidate = x * np.sqrt(-dc / (dv * lmbda))
+        x_new = np.maximum(
+            0.0,
+            np.maximum(
+                x - self.move,
+                np.minimum(
+                    1.0,
+                    np.minimum(x + self.move, x_candidate),
                 ),
-            )
-            gt = self._g + np.sum(dv * (xnew - x))
-            if gt > 0:
+            ),
+        )
+        return x_new
+
+    # =========================
+    # BISEKCJA DLA λ
+    # =========================
+    def _find_lagrange_multiplier(
+        self,
+        x: np.ndarray,
+        dc: np.ndarray,
+        dv: np.ndarray,
+    ) -> float:
+        """Rozwiązuje równanie constraintu:
+        
+        g(λ) = Σ dv * (x_new(λ) - x) + g_old = 0
+        """
+        l1, l2 = 0.0, 1e9
+        while (l2 - l1) / (l1 + l2) > self.bisect_tol:
+            lmid = 0.5 * (l1 + l2)
+            x_new = self._update_density(x, dc, dv, lmid)
+            g_val = self._constraint_residual(x, x_new, dv)
+            if g_val > 0:
                 l1 = lmid
             else:
                 l2 = lmid
+        return 0.5 * (l1 + l2)
 
-        self._g = gt  # carry state forward (Nguyen/Paulino approach)
-        return xnew
+    # =========================
+    # RESIDUUM OGRANICZENIA
+    # =========================
+    def _constraint_residual(
+        self,
+        x_old: np.ndarray,
+        x_new: np.ndarray,
+        dv: np.ndarray,
+    ) -> float:
+        """g(λ) – ile naruszamy constraint objętości"""
+        return self._g + np.sum(dv * (x_new - x_old))
