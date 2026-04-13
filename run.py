@@ -18,6 +18,7 @@ from FreqTop.fe.fe_solver import FESolver
 from FreqTop.filters.sensitivity import SensitivityFilter
 from FreqTop.filters.density import DensityFilter
 from FreqTop.optimizers.oc import OCOptimizer
+from FreqTop.optimizers.sqp import SQPOptimizer
 from FreqTop.callbacks.plotter import LivePlotter
 from FreqTop.callbacks.logger import ConsoleLogger
 
@@ -48,7 +49,7 @@ print(f"Filter method: {['Sensitivity based', 'Density based'][ft]}")
 problem   = CantileverProblem(nelx=nelx, nely=nely)
 fe        = FESolver(problem, penal=penal, Emin=1e-9, Emax=1.0)
 filt      = (SensitivityFilter if ft == 0 else DensityFilter)(nelx, nely, rmin)
-optimizer = OCOptimizer(move=0.2)
+optimizer = SQPOptimizer(move=0.2)
 
 plotter = LivePlotter(nelx=nelx, nely=nely)
 logger  = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac)
