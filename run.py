@@ -22,28 +22,21 @@ from FreqTop.optimizers.sqp import SQPOptimizer
 from FreqTop.callbacks.plotter import LivePlotter
 from FreqTop.callbacks.logger import ConsoleLogger
 
+from FreqTop.config.loader import load_parameters, map_to_run_args
 
 
-# ── Default parameters (identical to the original script) ────────────────────
-nelx    = 180
-nely    = 60
-volfrac = 0.4
-rmin    = 5.4
-penal   = 3.0
-ft      = 1      # 0 → sensitivity filter,  1 → density filter
 
-if len(sys.argv) > 1: nelx    = int(sys.argv[1])
-if len(sys.argv) > 2: nely    = int(sys.argv[2])
-if len(sys.argv) > 3: volfrac = float(sys.argv[3])
-if len(sys.argv) > 4: rmin    = float(sys.argv[4])
-if len(sys.argv) > 5: penal   = float(sys.argv[5])
-if len(sys.argv) > 6: ft      = int(sys.argv[6])
+params = load_parameters("parameters.json")
+args = map_to_run_args(params)
 
-# ── Banner ────────────────────────────────────────────────────────────────────
-print("Minimum compliance problem with OC")
-print(f"ndes: {nelx} x {nely}")
-print(f"volfrac: {volfrac}, rmin: {rmin}, penal: {penal}")
-print(f"Filter method: {['Sensitivity based', 'Density based'][ft]}")
+nelx    = args["nelx"]
+nely    = args["nely"]
+volfrac = args["volfrac"]
+rmin    = args["rmin"]
+penal   = args["penal"]
+ft      = args["ft"]
+max_iter = args["max_iter"]
+tol      = args["tol"]
 
 # ── Assemble components ───────────────────────────────────────────────────────
 problem   = CantileverProblem(nelx=nelx, nely=nely)

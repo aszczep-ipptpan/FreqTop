@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "name": "Beam-plate with passive flanges",
+    "notes": "Passive flanges counted in volume fraction.",
+    "units": {"length": "m", "force": "N", "density": "kg/m3", "elastic_modulus": "GPa"}
+  },
+  "domain": {
+    "size": {"length": 10.0, "height": 1.0},
+    "thickness": 1.0,
+    "mesh": {"nelx": 500, "nely": 50, "FEM_massmatrix_gamma": 1.4},  
+    "passive_regions": {
+      "flange": {
+        "top_relative_height": 0.06,
+        "is_top_passive_flag": true,
+        "bottom_relative_height": 0.06,
+        "is_bottom_passive_flag": true
+      }
+    }
+  },
+  "materials": {
+    "base": {"E": 205.0, "nu": 0.3, "rho": 7850.0}
+  },
+  "bc": {
+    "supports": [
+      {"type": "middle", "location": "left"},
+      {"type": "middle", "location": "right"}
+    ],
+    "loads":{
+      "is_selfweight": true, 
+      "gravity": 10.0
+    }
+  },
+  "optimisation": {
+    "objective": "min_compliance",
+    "volume_fraction": 0.40,
+    "method": "SIMP",
+    "penalization": 3.0,
+    "filter_radius": 0.06,
+    "move_limit": 0.2,
+    "max_iters": 70,
+    "change_treshold": 0.001,
+    "l2": 1e9,
+    "E_min": 1e-3,
+    "rho_min": 1e-4,
+    "convergence_tol": 1e-3,
+    "filter_type": "heaviside",
+    "heaviside_beta": 1,
+    "heaviside_eta": 0.5
+  }
+}
+ 
