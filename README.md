@@ -76,41 +76,48 @@ Results are written to `./outputs/`.
 
 ## Public API
 
-### info "MODEL — Problem & FE"
-    | Class | Module | Description |
-    |---|---|---|
-    | `CantileverProblem` | `utils/cantilever.py` | Fixed-left cantilever BCs and point-load vector |
-    | `FESolver` | `fe/fe_solver.py` | Assemble K, solve Ku=f, adjoint compliance sensitivities |
+### MODEL — Problem & FE
 
-### info "MODEL — Filters"
-    | Class | Module | Description |
-    |---|---|---|
-    | `DensityFilter` | `filters/density.py` | Convolve x → xPhys; filter dc and dv |
-    | `SensitivityFilter` | `filters/sensitivity.py` | Pass x as-is; smooth sensitivities only |
+| Class | Module | Description |
+| --- | --- | --- |
+| `CantileverProblem` | `utils/cantilever.py` | Fixed-left cantilever BCs and point-load vector |
+| `FESolver` | `fe/fe_solver.py` | Assemble K, solve Ku=f, adjoint compliance sensitivities |
 
-### info "MODEL — Optimizers"
-    | Class | Module | Description |
-    |---|---|---|
-    | `OCOptimizer` | `optimizers/oc.py` | Heuristic fixed-point update; bisection Lagrange multiplier |
-    | `SQPOptimizer` | `optimizers/sqp.py` | Diagonal-Hessian SQP; IQP + EQP correction + line search |
+### MODEL — Filters
 
-### example "CONTROLLER — Orchestration"
-    | Class | Module | Description |
-    |---|---|---|
-    | `TopOptSolver` | `solver.py` | Main loop: FE solve → sensitivities → filter → update → callbacks |
+| Class | Module | Description |
+| --- | --- | --- |
+| `DensityFilter` | `filters/density.py` | Convolve x → xPhys; filter dc and dv |
+| `SensitivityFilter` | `filters/sensitivity.py` | Pass x as-is; smooth sensitivities only |
 
-### success "VIEW — Visualisation"
-    | Class | Module | Description |
-    |---|---|---|
-    | `TopOptPlotter` | `viz/plotter.py` | Render density fields, convergence curves, time profiles, GIF animations |
-    | `PlotterConfig` | `viz/plotter.py` | Dataclass: output dir, DPI, colours, colourmap, font sizes |
+### MODEL — Optimizers
 
-### warning "OBSERVER — Callbacks & Profiling"
-    Communication layer between MODEL, CONTROLLER, and VIEW — fires after every iteration without coupling to any single layer.
-    | Class | Module | Description |
-    |---|---|---|
-    | `ConsoleLogger` | `callbacks/logger.py` | Per-iteration compliance / volume / change table |
-    | `ProfilingCallback` | `callbacks/profiling_callback.py` | Commits profiler state; collects objective and density history |
-    | `AlgorithmProfiler` | `profiling/profiler.py` | Context-manager stage timing and memory measurement |
-    | `ProfiledFESolver` | `profiling/instrumented.py` | Decorator: wraps `FESolver` with stage timing |
-    | `ProfiledOptimizer` | `profiling/instrumented.py` | Decorator: wraps any `Optimizer` with stage timing |
+| Class | Module | Description |
+| --- | --- | --- |
+| `OCOptimizer` | `optimizers/oc.py` | Heuristic fixed-point update; bisection Lagrange multiplier |
+| `SQPOptimizer` | `optimizers/sqp.py` | Diagonal-Hessian SQP; IQP + EQP correction + line search |
+
+### CONTROLLER — Orchestration
+
+| Class | Module | Description |
+| --- | --- | --- |
+| `TopOptSolver` | `solver.py` | Main loop: FE solve → sensitivities → filter → update → callbacks |
+
+### VIEW — Visualisation
+
+| Class | Module | Description |
+| --- | --- | --- |
+| `TopOptPlotter` | `viz/plotter.py` | Render density fields, convergence curves, time profiles, GIF animations |
+| `PlotterConfig` | `viz/plotter.py` | Dataclass: output dir, DPI, colours, colourmap, font sizes |
+
+### OBSERVER — Callbacks & Profiling
+
+Communication layer between MODEL, CONTROLLER, and VIEW — fires after every iteration without coupling to any single layer.
+
+| Class | Module | Description |
+| --- | --- | --- |
+| `ConsoleLogger` | `callbacks/logger.py` | Per-iteration compliance / volume / change table |
+| `ProfilingCallback` | `callbacks/profiling_callback.py` | Commits profiler state; collects objective and density history |
+| `AlgorithmProfiler` | `profiling/profiler.py` | Context-manager stage timing and memory measurement |
+| `ProfiledFESolver` | `profiling/instrumented.py` | Decorator: wraps `FESolver` with stage timing |
+| `ProfiledOptimizer` | `profiling/instrumented.py` | Decorator: wraps any `Optimizer` with stage timing |
