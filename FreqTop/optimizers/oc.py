@@ -1,5 +1,6 @@
 import numpy as np
 from .base import Optimizer
+import time
 
 
 class OCOptimizer(Optimizer):
@@ -44,11 +45,13 @@ class OCOptimizer(Optimizer):
         volfrac : float
             Target volume fraction (used to compute the constraint residual).   
         """
-
+        start = time.perf_counter()
         self._g = np.sum(dv * (x - volfrac))
         lmbda = self._find_lagrange_multiplier(x, dc, dv)
         x_new = self._update_density(x, dc, dv, lmbda)
-        return x_new
+        end = time.perf_counter()
+        total_time = end - start
+        return x_new, total_time
 
 
     # =========================

@@ -48,6 +48,7 @@ Given t_k, lam_k, xi_k, eta_k:
 """
 
 import numpy as np
+import time
 
 
 class SQPOptimizer:
@@ -140,6 +141,7 @@ class SQPOptimizer:
     # =========================================================================
 
     def update(self, x, dc, dv, g):
+        start = time.perf_counter()
         self._ensure_dual_variables(x)
         self._compute_kkt_residuals(x, dc, dv, g)
         Bk, lo, hi = self._build_local_model(x, dc)
@@ -158,7 +160,9 @@ class SQPOptimizer:
         xnew = np.clip(x + d_final, 0.0, 1.0)
         self._update_multipliers(alpha, lam_iq, xi_iq, eta_iq)
         gt = g + float(np.dot(dv, xnew - x))
-        return xnew
+        end = time.perf_counter()
+        total_time = end - start
+        return xnew, total_time
     
 
     def _build_local_model(self, x, dc):

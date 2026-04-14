@@ -12,6 +12,7 @@ class Callback(ABC):
         obj: float,
         xPhys: np.ndarray,
         change: float,
+        
     ) -> None:
         """Called once per optimisation iteration.
 

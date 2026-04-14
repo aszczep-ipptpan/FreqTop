@@ -67,18 +67,22 @@ class TopOptSolver:
         change = 1.0
         loop = 0
 
+        time_array = []
+
         while change > self.tol and loop < self.max_iter:
             loop += 1
 
             u = self.fe_solver.solve(xPhys)
             obj, dc, dv = self.fe_solver.sensitivities(xPhys, u)
             dc, dv = self.filter.filter_sensitivities(x, dc, dv)
-            x_new = self.optimizer.update(x, dc, dv, self.volfrac)
+            x_new, time = self.optimizer.update(x, dc, dv, self.volfrac)
             xPhys = self.filter.filter_design(x_new)
             change = float(np.linalg.norm(x_new - x, np.inf))
             x = x_new
 
+            time_array.append(time)
+
             for cb in self.callbacks:
-                cb(loop, obj, xPhys, change)
+                cb(loop, obj, xPhys, change, time)
 
         return xPhys
