@@ -140,10 +140,26 @@ class SQPOptimizer:
     # PUBLIC INTERFACE  (identical to OCOptimizer.update)
     # =========================================================================
 
-    def update(self, x, dc, dv, g):
+    def update(self, x, dc, dv, volfrac):
+        """Compute the SQP update for the design variables.
+
+        Parameters
+        ----------
+        x       : current design variable vector
+        dc      : objective sensitivities
+        dv      : volume sensitivities (passive elements must be zeroed by caller)
+        volfrac : effective volume fraction target for the active elements
+                  (same value as passed to OCOptimizer.update)
+
+        The constraint residual g = sum(dv*x) - volfrac*sum(dv) is computed
+        internally, matching the convention used by the OC bisection.
+        """
+        # Constraint residual: g < 0 means feasible, g > 0 means violated
+        g = float(np.dot(dv, x)) - volfrac * float(dv.sum())
+
         start = time.perf_counter()
         self._ensure_dual_variables(x)
-        self._compute_kkt_residuals(x, dc, dv, g)
+        #self._compute_kkt_residuals(x, dc, dv, g) #unused zbedny balast obliczeniowy
         Bk, lo, hi = self._build_local_model(x, dc)
         # === OC-like step ===
         d_iq, lam_iq = self._solve_iqp(dc, dv, Bk, lo, hi, g)
@@ -155,11 +171,10 @@ class SQPOptimizer:
         d_cand = d_iq + beta * d_eq
         # === merit & line search ===
         d_final, alpha, lam_final = self._line_search(
-            x, d_iq, d_cand, dc, dv, Bk, g, lam_iq, lam_eq ,xi_iq, eta_iq
+            x, d_iq, d_cand, dc, dv, Bk, g, lam_iq, lam_eq, xi_iq, eta_iq
         )
         xnew = np.clip(x + d_final, 0.0, 1.0)
         self._update_multipliers(alpha, lam_iq, xi_iq, eta_iq)
-        gt = g + float(np.dot(dv, xnew - x))
         end = time.perf_counter()
         total_time = end - start
         return xnew, total_time
@@ -277,9 +292,9 @@ class SQPOptimizer:
 
 
     
-    def __call__(self, x, dc, dv, g):
+    def __call__(self, x, dc, dv, volfrac):
         """Delegate to update() -- lets TopOptSolver call optimizer(...)."""
-        return self.update(x, dc, dv, g)
+        return self.update(x, dc, dv, volfrac)
 
     # =========================================================================
     # DIAGNOSTICS

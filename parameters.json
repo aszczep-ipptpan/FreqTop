@@ -7,13 +7,13 @@
   "domain": {
     "size": {"length": 10.0, "height": 1.0},
     "thickness": 1.0,
-    "mesh": {"nelx": 500, "nely": 50, "FEM_massmatrix_gamma": 1.4},  
+    "mesh": {"nelx": 1000, "nely": 100, "FEM_massmatrix_gamma": 1.0},  
     "passive_regions": {
       "flange": {
-        "top_relative_height": 0.06,
-        "is_top_passive_flag": true,
-        "bottom_relative_height": 0.06,
-        "is_bottom_passive_flag": true
+        "top_relative_height": 0.1,
+        "is_top_passive_flag": false,
+        "bottom_relative_height": 0.1,
+        "is_bottom_passive_flag": false
       }
     }
   },
@@ -22,12 +22,46 @@
   },
   "bc": {
     "supports": [
-      {"type": "middle", "location": "left"},
-      {"type": "middle", "location": "right"}
+      {"type": "clamped", "location": "left"},
+      {"type": "clamped", "location": "right"}
     ],
-    "loads":{
-      "is_selfweight": true, 
-      "gravity": 10.0
+    "loads": {
+      "is_selfweight": false,
+      "gravity": 10.0,
+      "concentrated_forces": [
+        {
+          "edge": "top",
+          "relative_horizontal_position": 0.5,
+          "direction": "y",
+          "value": -1.0
+        }
+      ]
+    }
+  },
+  "benchmark": {
+    "problem":   "weighted_quadratic",
+    "n_vars":    4,
+    "optimizer": "BOTH"
+  },
+  "benchmark_notes": {
+    "why_volfrac_must_be_0_1": "Both OC and SQP compute g = mean(x) - volfrac internally. Since x in [0,1], mean(x) <= 1 always. volfrac >= 1 makes constraint infeasible; volfrac <= 0 makes it trivially inactive and the constraint is silently ignored.",
+    "weighted_quadratic_settings_for_many_iterations": {
+      "n_vars": 4,
+      "volfrac": 0.4,
+      "move_limit": 0.02,
+      "max_iters": 10,
+      "convergence_tol": 1e-8,
+      "expected_OC_iters": "~100-200",
+      "expected_SQP_iters": "~20-50",
+      "analytic_KKT": "x* ~ [0.000, 0.354, 0.569, 0.677] with weights=[1,2,3,4]"
+    },
+    "simp_analogue_settings_for_many_iterations": {
+      "n_vars": 4,
+      "volfrac": 0.4,
+      "penalization": 3.0,
+      "move_limit": 0.02,
+      "max_iters": 500,
+      "convergence_tol": 1e-8
     }
   },
   "optimisation": {
@@ -35,16 +69,16 @@
     "volume_fraction": 0.40,
     "method": "SIMP",
     "penalization": 3.0,
-    "filter_radius": 0.06,
-    "move_limit": 0.2,
-    "max_iters": 70,
-    "change_treshold": 0.001,
+    "filter_radius": 0.4,
+    "move_limit": 0.8,
+    "max_iters": 40,
+    "change_treshold": 0.1,
     "l2": 1e9,
-    "E_min": 1e-3,
+    "E_min": 1e-1,
     "rho_min": 1e-4,
-    "convergence_tol": 1e-3,
+    "convergence_tol": 0.1,
     "filter_type": "heaviside",
-    "heaviside_beta": 1,
+    "heaviside_beta": 20,
     "heaviside_eta": 0.5
   }
 }

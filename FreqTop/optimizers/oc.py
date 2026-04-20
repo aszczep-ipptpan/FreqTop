@@ -67,8 +67,14 @@ class OCOptimizer(Optimizer):
         """Wzór OC:
         x_new = x * sqrt(-dc / (dv * λ))
         z ograniczeniami move i [0,1]
+
+        Guard: when dv*lmbda ≈ 0 (passive elements zeroed by solver),
+        ratio defaults to 1.0 so x_candidate = x (element unchanged).
         """
-        x_candidate = x * np.sqrt(-dc / (dv * lmbda))
+        denom = dv * lmbda
+        safe  = np.abs(denom) > 1e-30
+        ratio = np.where(safe, -dc / np.where(safe, denom, 1.0), 1.0)
+        x_candidate = x * np.sqrt(np.maximum(0.0, ratio))
         x_new = np.maximum(
             0.0,
             np.maximum(
@@ -95,7 +101,7 @@ class OCOptimizer(Optimizer):
         g(λ) = Σ dv * (x_new(λ) - x) + g_old = 0
         """
         l1, l2 = 0.0, 1e9
-        while (l2 - l1) / (l1 + l2) > self.bisect_tol:
+        while (l2 - l1) / (l1 + l2 + 1e-30) > self.bisect_tol:
             lmid = 0.5 * (l1 + l2)
             x_new = self._update_density(x, dc, dv, lmid)
             g_val = self._constraint_residual(x, x_new, dv)
