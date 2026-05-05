@@ -103,9 +103,9 @@ class TopOptSolver:
         if has_passive:
             xPhys[passive_elems] = 1.0
 
-        change = 1.0
+        change = float("inf")
         loop   = 0
-
+        obj = float("inf")
         while change > self.tol and loop < self.max_iter:
             loop += 1
 
@@ -137,9 +137,9 @@ class TopOptSolver:
 
             # Convergence measured on active elements only
             if has_passive:
-                change = float(np.linalg.norm(x_new[active_elems] - x[active_elems], np.inf))
+                change = float(np.linalg.norm(x_new[active_elems] - x[active_elems], 2))
             else:
-                change = float(np.linalg.norm(x_new - x, np.inf))
+                change = float(np.linalg.norm(x_new - x, 2))
 
             x = x_new
 

@@ -90,7 +90,7 @@ if not _sweep_mode:
         ft       = 1 if opt_cfg.get("filter_type", "density") == "heaviside" else 0
         max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else int(opt_cfg["max_iters"])
         tol      = float(opt_cfg["convergence_tol"])
-        mode     = sys.argv[1].upper() if len(sys.argv) > 1 else "BOTH"
+        mode     = sys.argv[1].upper() if len(sys.argv) > 1 else "SQP"
 
         problem_label = (
             f"{params['meta']['name']}  {nelx}x{nely}"
@@ -465,7 +465,7 @@ else:
     )
 
     print("\nRendering static plots ...")
-    plotter.render_all(nelx=nelx, nely=nely, oc_obj=oc_obj, sqp_obj=sqp_obj)
+    plotter.render_all(nelx=nelx, nely=nely, oc_obj=oc_obj, sqp_obj=sqp_obj, oc_change=oc_cb.change_history if oc_cb else None, sqp_change=sqp_cb.change_history if sqp_cb else None)
 
     print("Rendering animations ...")
     for m in [m for m in ("OC", "SQP") if density_history.get(m)]:
