@@ -1,11 +1,12 @@
 """FreqTop/config/loader.py — JSON parameter loading and domain factory."""
 
+import copy
 import json
 
 
 def load_parameters(path: str = "parameters.json") -> dict:
     """Load and return the raw JSON parameter dict from *path*."""
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -58,3 +59,35 @@ def map_to_run_args(params: dict) -> dict:
         "max_iter": params["optimisation"]["max_iters"],
         "tol":      params["optimisation"]["convergence_tol"],
     }
+
+
+def apply_overrides(params: dict, overrides: dict) -> dict:
+    """Return a deep copy of *params* with dot-notation key overrides applied.
+
+    Each key in *overrides* is a dot-separated path into the nested params
+    dict (e.g. ``"domain.mesh.nelx"``).  Any JSON-serialisable value is
+    accepted.
+
+    Example
+    -------
+    >>> p = apply_overrides(params, {"domain.mesh.nelx": 500,
+    ...                              "domain.mesh.nely": 50})
+    """
+    result = copy.deepcopy(params)
+    for dotted_key, value in overrides.items():
+        keys   = dotted_key.split(".")
+        target = result
+        for k in keys[:-1]:
+            target = target[k]
+        target[keys[-1]] = value
+    return result
+
+
+def make_beam_domain_from_dict(params: dict):
+    """Factory: create a BeamDomain from an already-loaded parameters dict.
+
+    Avoids re-reading the JSON file when the caller has already applied
+    overrides (e.g. during a parameter sweep).
+    """
+    from ..fe.domain import BeamDomain
+    return BeamDomain.from_dict(params)
