@@ -7,7 +7,7 @@
   "domain": {
     "size": {"length": 10.0, "height": 1.0},
     "thickness": 1.0,
-    "mesh": {"nelx": 1000, "nely": 100, "FEM_massmatrix_gamma": 1.0},  
+    "mesh": {"nelx": 500, "nely": 50, "FEM_massmatrix_gamma": 1.0},  
     "passive_regions": {
       "flange": {
         "top_relative_height": 0.1,
@@ -45,7 +45,7 @@
     "penalization": 3.0,
     "filter_radius": 0.4,
     "move_limit": 0.8,
-    "max_iters": 20,
+    "max_iters": 200,
     "l2": 1e9,
     "E_min": 1e-1,
     "rho_min": 1e-4,
