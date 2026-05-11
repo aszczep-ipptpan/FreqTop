@@ -1,0 +1,94 @@
+{
+  "_comment": "FreqTop output and visualisation configuration",
+
+  "run": {
+    "method": "BOTH",
+    "solver": "topopt"
+  },
+
+  "output": {
+    "folder": "results_beam_clamped_test"
+  },
+
+  "sweep": {
+    "_comment": "Set enabled=true to loop over values. Each entry overrides parameters.json using dot-notation paths.",
+    "enabled": false,
+    "values": [
+      {"domain.mesh.nelx": 500,  "domain.mesh.nely": 50},
+      {"domain.mesh.nelx": 2000,  "domain.mesh.nely": 200}
+    ],
+    "comparison_table": {
+      "enabled": true,
+      "filename": "comparison_table.tsv"
+    }
+  },
+
+  "plots": {
+    "density": {
+      "enabled": true
+    },
+    "convergence": {
+      "enabled": true
+    },
+    "change_norm": {
+      "enabled": true
+    },
+    "volume_fraction": {
+      "enabled": true
+    },
+    "stage_breakdown": {
+      "enabled": true
+    },
+    "change_vs_cumtime": {
+      "enabled": true
+    },
+    "cumulative_time": {
+      "enabled": true
+    },
+    "cumulative_memory": {
+      "enabled": true
+    },
+    "obj_vs_cumtime": {
+      "enabled": true
+    },
+    "comparison": {
+      "enabled": true
+    },
+    "density_animation": {
+      "enabled": true
+    },
+    "density_animation_singleframes": {
+      "enabled": true
+    },
+    "cumtime_animation": {
+      "enabled": true
+    }
+  },
+
+  "csv": {
+    "enabled": true,
+    "description": "Tab-separated export — one file per method: oc_data.csv, sqp_data.csv",
+    "columns": {
+      "method":               true,
+      "iteration":            true,
+      "time_s":               true,
+      "cumulative_time_s":    true,
+      "memory_mb":            true,
+      "cumulative_memory_mb": true,
+      "objective_f":          true,
+      "change":               true
+    }
+  },
+
+  "style": {
+    "dpi":              150,
+    "fig_size":         [9.0, 5.5],
+    "font_family":      "Times New Roman",
+    "font_size":        11,
+    "title_font_size":  11,
+    "show_grid":        true,
+    "density_cmap":     "gray",
+    "animation_fps":    5,
+    "animation_format": "gif"
+  }
+}
