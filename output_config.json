@@ -12,10 +12,10 @@
 
   "sweep": {
     "_comment": "Set enabled=true to loop over values. Each entry overrides parameters.json using dot-notation paths.",
-    "enabled": false,
+    "enabled": true,
     "values": [
-      {"domain.mesh.nelx": 500,  "domain.mesh.nely": 50},
-      {"domain.mesh.nelx": 2000,  "domain.mesh.nely": 200}
+      {"domain.mesh.nelx": 100,  "domain.mesh.nely": 10},
+      {"domain.mesh.nelx": 200,  "domain.mesh.nely": 20}
     ],
     "comparison_table": {
       "enabled": true,
@@ -84,8 +84,8 @@
     "dpi":              150,
     "fig_size":         [9.0, 5.5],
     "font_family":      "Times New Roman",
-    "font_size":        11,
-    "title_font_size":  11,
+    "font_size":        18,
+    "title_font_size":  18,
     "show_grid":        true,
     "density_cmap":     "gray",
     "animation_fps":    5,

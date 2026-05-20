@@ -308,6 +308,9 @@ class BeamDomain(MeshDomain):
         # dof_offset: 0 = x-DOF, 1 = y-DOF
         self._concentrated_forces: list[dict] = []
 
+        # Modal (eigenvector-based) forces — populated by _append_modal_force
+        self._modal_force_specs: list = []
+
         self._parse_passive_regions(domain.get("passive_regions", {}))
         self._parse_supports(params["bc"]["supports"])
         self._parse_loads(
@@ -360,6 +363,25 @@ class BeamDomain(MeshDomain):
 
         Each entry becomes one or more (node_id, constraint_type) tuples
         in _supports.  No boolean mask arrays are used.
+
+        Supported type / location combinations
+        --------------------------------------
+        ``{"type": "clamp"|"clamped", "location": "left"|"right"|"bottom"|"top"}``
+            All nodes on that edge, both DOFs fixed.
+
+        ``{"type": "clamp"|"clamped",
+           "location": "left_midpoint"|"right_midpoint"|"bottom_midpoint"|"top_midpoint"}``
+            Single mid-height / mid-span node of that edge — useful for
+            knife-edge / simply-supported conditions (SS, CS Olhoff cases).
+
+        ``{"type": "middle", "location": "left"|"right"|"bottom"|"top"}``
+            Alias: single midpoint node of the named edge.
+
+        ``{"type": "node", "rx": float, "ry": float}``
+            Node nearest to relative domain position (rx, ry) ∈ [0, 1]².
+
+        All types accept an optional ``"constraint"`` key (default ``"xy"``):
+            ``"xy"`` — fix both DOFs  |  ``"x"`` — x only  |  ``"y"`` — y only
         """
         _edge_nodes = {
             "left":   self.left_nodes,
@@ -367,11 +389,16 @@ class BeamDomain(MeshDomain):
             "bottom": self.bottom_nodes,
             "top":    self.top_nodes,
         }
+        # Midpoint relative positions for each edge and their "_midpoint" aliases
         _midpoints = {
-            "left":   (0.0, 0.5),
-            "right":  (1.0, 0.5),
-            "bottom": (0.5, 0.0),
-            "top":    (0.5, 1.0),
+            "left":              (0.0, 0.5),
+            "right":             (1.0, 0.5),
+            "bottom":            (0.5, 0.0),
+            "top":               (0.5, 1.0),
+            "left_midpoint":     (0.0, 0.5),
+            "right_midpoint":    (1.0, 0.5),
+            "bottom_midpoint":   (0.5, 0.0),
+            "top_midpoint":      (0.5, 1.0),
         }
 
         for entry in supports_cfg:
@@ -380,13 +407,23 @@ class BeamDomain(MeshDomain):
             constraint = entry.get("constraint", "xy")
 
             if stype in ("clamp", "clamped"):
-                if location not in _edge_nodes:
+                if location in _edge_nodes:
+                    # Full-edge clamp: fix every node on the named edge.
+                    for n in _edge_nodes[location]():
+                        self._supports.append((int(n), constraint))
+                elif location in _midpoints:
+                    # Midpoint-only pin: single node at mid-height / mid-span.
+                    # Covers "left_midpoint", "right_midpoint", etc. as used
+                    # in the Olhoff SS / CS benchmark cases.
+                    rx, ry = _midpoints[location]
+                    self._supports.append((self.node_at_relative(rx, ry), constraint))
+                else:
                     raise ValueError(
                         f"Unknown clamp location: {location!r}. "
-                        "Valid: 'left', 'right', 'bottom', 'top'."
+                        "Valid edge names: 'left', 'right', 'bottom', 'top'. "
+                        "Valid midpoint names: 'left_midpoint', 'right_midpoint', "
+                        "'bottom_midpoint', 'top_midpoint'."
                     )
-                for n in _edge_nodes[location]():
-                    self._supports.append((int(n), constraint))
 
             elif stype == "middle":
                 if location not in _midpoints:
@@ -405,7 +442,7 @@ class BeamDomain(MeshDomain):
             else:
                 raise ValueError(
                     f"Unknown support type: {stype!r}. "
-                    "Valid types: 'clamp', 'middle', 'node'."
+                    "Valid types: 'clamp', 'clamped', 'middle', 'node'."
                 )
 
     def _parse_loads(self, loads_cfg: dict, material_cfg: dict) -> None:
@@ -441,6 +478,10 @@ class BeamDomain(MeshDomain):
         * Stored as plain dicts; applied in get_load_vector().
         """
         for entry in forces_cfg:
+            if entry.get("type", "point").lower() == "modal":
+                self._append_modal_force(entry)
+                continue
+
             edge      = entry.get("edge", "top").lower()
             direction = entry.get("direction", "y").lower()
             value     = float(entry.get("value", 0.0))
@@ -471,6 +512,29 @@ class BeamDomain(MeshDomain):
                 "dof_offset": 0 if direction == "x" else 1,
                 "value":      value,
             })
+
+    # ------------------------------------------------------------------
+    # Modal force helpers  (consumed by ModalFESolver)
+    # ------------------------------------------------------------------
+
+    def _append_modal_force(self, entry: dict) -> None:
+        """Parse a ``{"type": "modal", "number_of_modes": N}`` JSON entry
+        and append a ``ModalForceSpec`` to ``_modal_force_specs``.
+
+        The import is deferred to avoid a circular-import issue between
+        domain.py and modal_load.py.
+        """
+        from .modal_load import ModalForceSpec     # local import — intentional
+        mode_index = int(entry.get("number_of_modes", 1))
+        self._modal_force_specs.append(ModalForceSpec(mode_index=mode_index))
+
+    def has_modal_forces(self) -> bool:
+        """Return True when at least one modal force spec is registered."""
+        return len(self._modal_force_specs) > 0
+
+    def get_modal_force_specs(self) -> list:
+        """Return a shallow copy of the list of ModalForceSpec objects."""
+        return list(self._modal_force_specs)
 
     # ------------------------------------------------------------------
     # Problem interface  (required by FESolver and TopOptSolver)
@@ -507,7 +571,7 @@ class BeamDomain(MeshDomain):
         f = np.zeros((self.ndof, 1))
         if constant is not True:
             if self._selfweight_fy != 0.0:
-                f[1::2, 0] = self._selfweight_fy
+                f += self.deadload()
         if constant is not False:
             for force in self._concentrated_forces:
                 dof = 2 * force["node_id"] + force["dof_offset"]
@@ -660,6 +724,20 @@ class BeamDomain(MeshDomain):
             nodal_sharp *= S_orig / S_new
 
         return nodal_sharp
+
+    def deadload(self) -> np.ndarray:
+        """
+        Constant (density-independent) self-weight load vector, shape (ndof, 1).
+
+        Applies ``_selfweight_fy`` uniformly to every y-DOF.  The x-component
+        is always zero (gravity acts in the −y direction only).
+
+        Used directly by ``get_load_vector`` and as the base vector scaled by
+        ``dynamic_f`` during frequency optimisation.
+        """
+        f = np.zeros((self.ndof, 1))
+        f[1::2, 0] = self._selfweight_fy
+        return f
 
     def dynamic_f(self, field: np.ndarray) -> np.ndarray:
         """

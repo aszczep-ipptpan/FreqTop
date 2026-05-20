@@ -177,7 +177,12 @@ class SQPOptimizer:
         self._update_multipliers(alpha, lam_iq, xi_iq, eta_iq)
         end = time.perf_counter()
         total_time = end - start
-        return xnew, total_time
+        mem_mb = (
+            dc.nbytes + dv.nbytes + x.nbytes + xnew.nbytes +
+            eta_iq.nbytes + d_eq.nbytes + d_final.nbytes +
+            d_cand.nbytes + lo.nbytes + xi_iq.nbytes + Bk.nbytes
+        ) / 1024**2
+        return xnew, total_time, mem_mb
     
 
     def _build_local_model(self, x, dc):

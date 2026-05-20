@@ -45,7 +45,7 @@
     "penalization": 3.0,
     "filter_radius": 0.4,
     "move_limit": 0.8,
-    "max_iters": 200,
+    "max_iters": 600,
     "l2": 1e9,
     "E_min": 1e-1,
     "rho_min": 1e-4,

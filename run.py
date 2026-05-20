@@ -52,18 +52,19 @@ from FreqTop.filters.density     import DensityFilter
 from FreqTop.optimizers.registry import make_optimizer, resolve_methods, HESSIAN_METHODS
 from FreqTop.runner_types        import RunResult, SimulationConfig
 from FreqTop.callbacks.logger    import ConsoleLogger
-from FreqTop.utils.base          import checkerboard_init
 
 from FreqTop.profiling import AlgorithmProfiler
 from FreqTop.profiling.instrumented import ProfiledFESolver, ProfiledOptimizer
 from FreqTop.callbacks.profiling_callback import ProfilingCallback
 from FreqTop.viz import TopOptPlotter, PlotterConfig, TOPOPT_SIMP_LATEX
 
+from FreqTop.config.loader import load_parameters, make_beam_domain
+
 # ---------------------------------------------------------------------------
 # Detect run mode: JSON vs. legacy CLI
 # ---------------------------------------------------------------------------
 
-_JSON_FILE   = "parameters.json"
+_JSON_FILE   = "parameters_maxfrequency.json"
 _OUTPUT_CFG  = "output_config.json"
 
 _out_cfg        = json.load(open(_OUTPUT_CFG, encoding="utf-8")) if os.path.exists(_OUTPUT_CFG) else {}
@@ -71,61 +72,44 @@ _output_folder  = _out_cfg.get("output", {}).get("folder", "outputs")
 _sweep_enabled  = _out_cfg.get("sweep",  {}).get("enabled", False)
 
 
-
-
 def _make_filter(nelx, nely, rmin, ft):
     return (SensitivityFilter if ft == 0 else DensityFilter)(nelx, nely, rmin)
 
 
-
-def _run_sweep_case(
+def run_single(
     *,
-    case_name: str,
-    base_output_dir: str = "outputs_sweep",
+    problem,
     nelx: int,
     nely: int,
-    rmin: float,
     volfrac: float,
+    rmin: float,
     penal: float,
     ft: int,
     max_iter: int,
     tol: float,
     move: float,
-    init_type: str,   # "uniform" | "checkerboard"
+    output_dir: str,
+    problem_label: str,
+    case_label: str = "",
+    objective: str = "min_compliance",
 ) -> tuple[str, str]:
-    """Run OC then SQP for one sweep case, write shared outputs, return summaries.
+    """Run OC and SQP for one case, write outputs to output_dir, return (oc_summary, sqp_summary)."""
+    results: dict[str, RunResult] = {}
 
-    Both methods share the same output directory and produce the same file set
-    as the normal ``BOTH`` mode — density snapshots, convergence, volume fraction,
-    cumulative time/memory, stage breakdown, comparison plot, and animations.
-    """
-    from FreqTop.utils.cantilever import CantileverProblem
-
-    x_init = (
-        checkerboard_init(nelx, nely, block_size=10)
-        if init_type == "checkerboard"
-        else None
-    )
-
-    sweep_results: dict[str, RunResult] = {}
-
-    for method in ["OC", "SQP"]:#resolve_methods("BOTH"):
+    for method in ["SQP", "OC"]:#resolve_methods("BOTH"):
         print(f"\n{'-'*60}")
-        print(f"  Running {method}  [{case_name}]")
+        suffix = f"  [{case_label}]" if case_label else ""
+        print(f"  Running {method}{suffix}")
         print(f"{'-'*60}")
 
-        problem = CantileverProblem(nelx=nelx, nely=nely)
-        fe      = FESolver(problem, penal=penal, Emin=1e-9, Emax=1.0)
-        filt    = _make_filter(nelx, nely, rmin, ft)
-
-        raw_opt = make_optimizer(method, move=move, penal=penal)
-
+        fe           = FESolver(problem, penal=penal, Emin=1e-9, Emax=1.0)
+        filt         = _make_filter(nelx, nely, rmin, ft)
+        raw_opt      = make_optimizer(method, move=move, penal=penal)
         profiler     = AlgorithmProfiler(method=method)
         profiled_fe  = ProfiledFESolver(fe, profiler)
         profiled_opt = ProfiledOptimizer(raw_opt, profiler)
-
-        prof_cb = ProfilingCallback(profiler, collect_density=True, collect_objective=True)
-        logger  = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac)
+        prof_cb      = ProfilingCallback(profiler, collect_density=True, collect_objective=True)
+        logger       = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac)
 
         solver = TopOptSolver(
             problem   = problem,
@@ -136,12 +120,16 @@ def _run_sweep_case(
             callbacks = (logger, prof_cb),
             max_iter  = max_iter,
             tol       = tol,
-            x_init    = x_init,
         )
-        solver.run()
+
+        if objective == "max_frequency":
+            solver.max_frequency()
+        if objective == "min_compliance":
+            solver.min_compliance()
+
         print(f"\n{profiler.summary()}")
 
-        sweep_results[method] = RunResult(
+        results[method] = RunResult(
             method       = method,
             sim_config   = SimulationConfig(nelx=nelx, nely=nely),
             profiler     = profiler,
@@ -149,9 +137,7 @@ def _run_sweep_case(
             hessian_used = method in HESSIAN_METHODS,
         )
 
-    # Shared output directory — no method suffix, mirrors the BOTH mode layout.
-    output_dir = os.path.join(base_output_dir, case_name)
-    sweep_cfg = PlotterConfig(
+    cfg = PlotterConfig(
         output_dir       = output_dir,
         dpi              = 100,
         animation_fps    = 5,
@@ -160,28 +146,19 @@ def _run_sweep_case(
         show_grid        = True,
         font_size        = 10,
     )
-
-    problem_label = f"{case_name}  vf={volfrac}  p={penal}  move={move}"
-
-    plotter = TopOptPlotter(
-        config        = sweep_cfg,
-        results       = sweep_results,
-        problem_label = problem_label,
-    )
-
+    plotter = TopOptPlotter(config=cfg, results=results, problem_label=problem_label)
     plotter.render_all(nelx=nelx, nely=nely)
 
-    for m in sweep_results:
+    for m in results:
         if plotter.density_history.get(m):
             plotter.animate_density(method=m, nelx=nelx, nely=nely, save=True)
-
     plotter.animate_cumulative_time(method=None, save=True)
-    #plotter.animate_density_singleframes(method: str = "OC", nelx: int = 180, nely: int = 60)
 
     print(f"  Results saved to: {output_dir}/")
+
     return (
-        sweep_results["OC"].profiler.summary()  if "OC"  in sweep_results else "",
-        sweep_results["SQP"].profiler.summary() if "SQP" in sweep_results else "",
+        results["OC"].profiler.summary()  if "OC"  in results else "",
+        results["SQP"].profiler.summary() if "SQP" in results else "",
     )
 
 
@@ -214,13 +191,16 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
     _opt    = _p["optimisation"]
     _swcfg  = _out_cfg.get("sweep", {})
 
-    _volfrac  = float(_opt["volume_fraction"])
-    _penal    = float(_opt["penalization"])
-    _ft       = 1 if _opt.get("filter_type", "density") == "heaviside" else 0
-    _max_iter = int(_opt["max_iters"])
-    _moves    = _swcfg.get("moves", [float(_opt.get("move", 0.8))])
-    _tol_list = _swcfg.get("tol",   [float(_opt["convergence_tol"])])
+    _volfrac    = float(_opt["volume_fraction"])
+    _penal      = float(_opt["penalization"])
+    _ft         = 1 if _opt.get("filter_type", "density") == "heaviside" else 0
+    _max_iter   = int(_opt["max_iters"])
+    _moves      = _swcfg.get("moves", [float(_opt.get("move", 0.8))])
+    _tol_list   = _swcfg.get("tol",   [float(_opt["convergence_tol"])])
+    _objective  = _opt.get("objective", "min_compliance")
     _SWEEP_MESHES = _swcfg.get("values")
+
+    problem = make_beam_domain(_JSON_FILE)
 
     results: list[tuple[str, tuple | None]] = []
     total = (
@@ -237,9 +217,7 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
         for tol_val in _tol_list:
             for move_val in _moves:
                 done += 1
-                case_name = (
-                    f"{mesh_label}"
-                )
+                case_name = f"{mesh_label}"
                 print(f"\n{'='*60}")
                 print(f"  SWEEP [{done}/{total}]: {case_name}")
                 print(f"  mesh={nelx_s}x{nely_s}  rmin={rmin_s:.1f}"
@@ -248,19 +226,21 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
                 print(f"{'='*60}")
 
                 try:
-                    summaries = _run_sweep_case(
-                        case_name       = case_name,
-                        base_output_dir = _output_folder,
-                        nelx            = nelx_s,
-                        nely            = nely_s,
-                        rmin            = rmin_s,
-                        volfrac         = _volfrac,
-                        penal           = _penal,
-                        ft              = _ft,
-                        max_iter        = _max_iter,
-                        tol             = tol_val,
-                        move            = move_val,
-                        init_type       = "uniform"
+                    summaries = run_single(
+                        problem       = problem,
+                        nelx          = problem.nelx,
+                        nely          = problem.nely,
+                        volfrac       = _volfrac,
+                        rmin          = rmin_s,
+                        penal         = _penal,
+                        ft            = _ft,
+                        max_iter      = _max_iter,
+                        tol           = tol_val,
+                        move          = move_val,
+                        output_dir    = os.path.join(_output_folder, case_name),
+                        problem_label = f"{case_name}  vf={_volfrac}  p={_penal}  move={move_val}",
+                        case_label    = case_name,
+                        objective     = _objective,
                     )
                     results.append((case_name, summaries))
 
@@ -278,24 +258,25 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
     return results
 
 
-def _run_single(*, output_dir: str) -> None:
-    """Run a single (non-sweep) optimisation and write plots to output_dir."""
-    from FreqTop.config.loader import load_parameters, make_beam_domain
-
+if _sweep_enabled:
+    run_sweep()
+else:
     params   = load_parameters(_JSON_FILE)
     opt_cfg  = params["optimisation"]
     domain   = make_beam_domain(_JSON_FILE)
 
     nelx     = domain.nelx
     nely     = domain.nely
+
     volfrac  = float(opt_cfg["volume_fraction"])
     rmin     = float(opt_cfg["filter_radius"]) * float(params["domain"]["size"]["length"])
     penal    = float(opt_cfg["penalization"])
     ft       = 1 if opt_cfg.get("filter_type", "density") == "heaviside" else 0
     max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else int(opt_cfg["max_iters"])
-    tol      = float(opt_cfg["convergence_tol"])
-    mode     = sys.argv[1].upper() if len(sys.argv) > 1 else "BOTH"
-    move     = float(opt_cfg.get("move", 0.8))
+    tol       = float(opt_cfg["convergence_tol"])
+    mode      = sys.argv[1].upper() if len(sys.argv) > 1 else "BOTH"
+    move      = float(opt_cfg.get("move", 0.8))
+    objective = opt_cfg.get("objective", "min_compliance")
 
     problem_label = (
         f"{params['meta']['name']}  {nelx}x{nely}"
@@ -315,64 +296,18 @@ def _run_single(*, output_dir: str) -> None:
         print(f"  Passive : {n_pass} elements ({n_pass/domain.nelxy:.1%} of domain)")
     print("=" * 60)
 
-    results: dict[str, RunResult] = {}
-
-    for method in resolve_methods(mode):
-        print(f"\n{'-'*60}")
-        print(f"  Running {method}")
-        print(f"{'-'*60}")
-
-        fe          = FESolver(domain, penal=penal, Emin=1e-9, Emax=1.0)
-        filt        = _make_filter(nelx, nely, rmin, ft)
-        raw_opt     = make_optimizer(method, move=move, penal=penal)
-        profiler    = AlgorithmProfiler(method=method)
-        profiled_fe  = ProfiledFESolver(fe, profiler)
-        profiled_opt = ProfiledOptimizer(raw_opt, profiler)
-        prof_cb     = ProfilingCallback(profiler, collect_density=True, collect_objective=True)
-        logger      = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac)
-
-        solver = TopOptSolver(
-            problem   = domain,
-            fe_solver = profiled_fe,
-            filter    = filt,
-            optimizer = profiled_opt,
-            volfrac   = volfrac,
-            callbacks = (logger, prof_cb),
-            max_iter  = max_iter,
-            tol       = tol,
-        )
-        solver.run()
-        print(f"\n{profiler.summary()}")
-
-        results[method] = RunResult(
-            method       = method,
-            sim_config   = SimulationConfig(nelx=nelx, nely=nely),
-            profiler     = profiler,
-            cb           = prof_cb,
-            hessian_used = method in HESSIAN_METHODS,
-        )
-
-    cfg = PlotterConfig(
-        output_dir       = output_dir,
-        dpi              = 100,
-        animation_fps    = 5,
-        animation_format = "gif",
-        title_prefix     = TOPOPT_SIMP_LATEX,
-        show_grid        = True,
-        font_size        = 10,
+    run_single(
+        problem       = domain,
+        nelx          = nelx,
+        nely          = nely,
+        volfrac       = volfrac,
+        rmin          = rmin,
+        penal         = penal,
+        ft            = ft,
+        max_iter      = max_iter,
+        tol           = tol,
+        move          = move,
+        output_dir    = _output_folder,
+        problem_label = problem_label,
+        objective     = objective,
     )
-    plotter = TopOptPlotter(config=cfg, results=results, problem_label=problem_label)
-    plotter.render_all(nelx=nelx, nely=nely)
-
-    for m in results:
-        if plotter.density_history.get(m):
-            plotter.animate_density(method=m, nelx=nelx, nely=nely, save=True)
-    plotter.animate_cumulative_time(method=None, save=True)
-
-    print(f"  Results saved to: {output_dir}/")
-
-
-if _sweep_enabled:
-    run_sweep()
-else:
-    _run_single(output_dir=_output_folder)
