@@ -1,11 +1,190 @@
 """FreqTop/solver.py — topology optimisation loop."""
 
+from collections import namedtuple
+
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import eigsh
 
 from .utils.base import TopOptSolver as Problem
 from .fe.fe_solver import FESolver
 from .filters.base import Filter
 from .optimizers.base import Optimizer
+
+
+# ---------------------------------------------------------------------------
+# Material / element / FEM helpers
+# ---------------------------------------------------------------------------
+
+class MaterialProperties:
+    """SIMP material interpolation parameters and physical material constants."""
+
+    def __init__(
+        self,
+        Emin: float = 1e-9,
+        Emax: float = 1.0,
+        penal: float = 3.0,
+        rho_min: float = 1e-2,
+        rho_max: float = 1.0,
+        E: float = 1.0,
+        rho: float = 1.0,
+    ):
+        self.Emin    = Emin
+        self.Emax    = Emax
+        self.penal   = penal
+        self.rho_min = rho_min
+        self.rho_max = rho_max
+        self.E       = E    # physical Young's modulus [Pa]
+        self.rho     = rho  # physical mass density [kg/m³]
+
+    def read_json_params(self, json_path: str) -> None:
+        """Read all material and SIMP parameters from a JSON parameter file.
+
+        Reads physical constants (E, nu, rho) from ``materials.base`` and
+        SIMP interpolation parameters (Emin, Emax, penal, rho_min, rho_max)
+        from ``optimisation``.  Unit conversion is applied to the elastic
+        modulus (GPa → Pa, MPa → Pa).
+        """
+        import json
+        with open(json_path, 'r', encoding='utf-8') as f:
+            root_params = json.load(f)
+
+        mat    = root_params.get("materials").get("base")
+        opt    = root_params.get("optimisation", {})
+        units  = root_params.get("meta", {}).get("units", {}).get("elastic_modulus", "")
+
+        self.E  = mat.get("E")
+        if units == "GPa":
+            self.E *= 1e9
+        elif units == "MPa":
+            self.E *= 1e6
+        self.nu  = mat.get("nu")
+        self.rho = mat.get("rho")
+
+        self.penal   = opt.get("penalization",  self.penal)
+        self.Emin    = opt.get("E_min",         self.Emin)
+        self.Emax    = self.E
+        self.rho_min = opt.get("rho_min",       self.rho_min)
+        self.rho_max = opt.get("rho_max",       self.rho_max)
+
+
+class Element:
+    """QUAD4 element stiffness and consistent mass matrices."""
+
+    def __init__(self, KE: np.ndarray):
+        self._KE = KE
+
+    def compute_QUAD4_element_stiffness(self, E: float) -> np.ndarray:
+        """Return the physical element stiffness matrix scaled by Young's modulus E [Pa]."""
+        return self._KE * E
+
+    @staticmethod
+    def compute_QUAD4_element_mass(rho: float, volume_element: float = 1.0) -> np.ndarray:
+        """Return the physical consistent mass matrix for a Q4 element.
+
+        Parameters
+        ----------
+        rho : float
+            Mass density [kg/m³].
+        volume_element : float
+            Element volume (length_x * length_y / n_elements) [m³].
+        """
+        ME_unit = np.array([
+            [4, 0, 2, 0, 1, 0, 2, 0],
+            [0, 4, 0, 2, 0, 1, 0, 2],
+            [2, 0, 4, 0, 2, 0, 1, 0],
+            [0, 2, 0, 4, 0, 2, 0, 1],
+            [1, 0, 2, 0, 4, 0, 2, 0],
+            [0, 1, 0, 2, 0, 4, 0, 2],
+            [2, 0, 1, 0, 2, 0, 4, 0],
+            [0, 2, 0, 1, 0, 2, 0, 4],
+        ], dtype=np.float64) / 36.0
+        return ME_unit * rho * volume_element
+
+
+_FreqResult = namedtuple("FreqResult", ["lam1", "omega1", "v", "eigvals", "eigvecs"])
+
+
+class FEM:
+    """FE assembly and fundamental-frequency computation for topology optimisation."""
+
+    def __init__(
+        self,
+        fe_solver: FESolver,
+        material: MaterialProperties,
+        ndof: int,
+        volume_element: float = 1.0,
+    ):
+        self.material = material
+        element       = Element(fe_solver.KE)
+        # Physical element matrices: E and rho * volume_element already baked in.
+        self.KE       = element.compute_QUAD4_element_stiffness(material.E)
+        self.ME       = Element.compute_QUAD4_element_mass(material.rho, volume_element)
+        self.edofMat  = fe_solver.edofMat
+        self.iK       = fe_solver.iK
+        self.jK       = fe_solver.jK
+        self.free     = fe_solver.free
+        self.ndof     = ndof
+
+    def assemble_stiffness_matrix(self, coeff: np.ndarray):
+        """Assemble global K from per-element SIMP stiffness coefficients (dimensionless)."""
+        sK = ((self.KE.flatten()[np.newaxis]).T * coeff).flatten(order="F")
+        return coo_matrix((sK, (self.iK, self.jK)), shape=(self.ndof, self.ndof)).tocsr()
+
+    def assemble_mass_matrix(self, coeff: np.ndarray):
+        """Assemble global M from per-element SIMP mass coefficients (dimensionless)."""
+        sM = ((self.ME.flatten()[np.newaxis]).T * coeff).flatten(order="F")
+        return coo_matrix((sM, (self.iK, self.jK)), shape=(self.ndof, self.ndof)).tocsr()
+
+    def compute_freq(self, xPhys: np.ndarray, k: int = 1) -> "_FreqResult | None":
+        """Assemble K and M, solve generalised EVP for k lowest modes.
+
+        Returns k eigenvalues (ascending) and M-normalised eigenvectors, plus
+        lam1/omega1/v for the fundamental mode.  Returns None on solver failure.
+        """
+        mat  = self.material
+        Ee   = mat.Emin + xPhys ** mat.penal * (mat.Emax - mat.Emin)
+
+        # Tcherniak (2002) mass modification — eliminates spurious localized
+        # eigenmodes in near-void regions (Du & Olhoff 2007, Section 2.2, eq. 4a).
+        # For ρₑ > 0.1: linear interpolation  re = rho_min + ρ*(rho_max-rho_min)
+        # For ρₑ ≤ 0.1: penalised  re = c0 * ρ^6 * rho_max
+        # Continuity at ρ=0.1 requires c0 = (rho_min + 0.1*(rho_max-rho_min)) / (rho_max * 0.1^6)
+        _rho_thresh  = 0.1
+        _r_void      = 6
+        _re_thresh   = mat.rho_min + _rho_thresh * (mat.rho_max - mat.rho_min)
+        _c0          = _re_thresh / (mat.rho_max * _rho_thresh ** _r_void)
+        re = np.where(
+            xPhys > _rho_thresh,
+            mat.rho_min + xPhys * (mat.rho_max - mat.rho_min),
+            _c0 * xPhys ** _r_void * mat.rho_max,
+        )
+
+        # KE and ME already carry physical units (E [Pa], rho [kg/m³], volume_element [m³])
+        K    = self.assemble_stiffness_matrix(Ee)
+        M    = self.assemble_mass_matrix(re)
+        free = self.free
+        Kf   = K[free, :][:, free].tocsr()
+        Mf   = M[free, :][:, free].tocsr()
+        try:
+            eigvals, eigvecs = eigsh(
+                Kf, k=k, M=Mf, sigma=0.0, which="LM", tol=1e-8, maxiter=4000
+            )
+        except Exception:
+            return None
+        # Sort ascending and take real parts
+        idx     = np.argsort(np.real(eigvals))
+        eigvals = np.real(eigvals[idx])
+        eigvecs = np.real(eigvecs[:, idx])
+        # M-normalise every eigenvector: vᵢᵀ M vᵢ = 1
+        for i in range(k):
+            norm_m = float(eigvecs[:, i] @ (Mf @ eigvecs[:, i]))
+            if norm_m > 1e-30:
+                eigvecs[:, i] /= np.sqrt(norm_m)
+        lam1   = float(eigvals[0])
+        omega1 = float(np.sqrt(max(lam1, 0.0)))
+        v      = eigvecs[:, 0]
+        return _FreqResult(lam1=lam1, omega1=omega1, v=v, eigvals=eigvals, eigvecs=eigvecs)
 
 
 class TopOptSolver:
@@ -160,36 +339,24 @@ class TopOptSolver:
         xPhys : np.ndarray, shape (nelx*nely,)
             Final physical density field.
         """
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.linalg import eigsh
-
         nelx, nely = self.problem.nelx, self.problem.nely
         n_el = nelx * nely
         ndof = self.problem.ndof
 
-        # Consistent mass matrix for a Q4 unit-square element (unit density,
-        # unit thickness).  Same DOF ordering as lk() / edofMat.
-        ME = np.array([
-            [4, 0, 2, 0, 1, 0, 2, 0],
-            [0, 4, 0, 2, 0, 1, 0, 2],
-            [2, 0, 4, 0, 2, 0, 1, 0],
-            [0, 2, 0, 4, 0, 2, 0, 1],
-            [1, 0, 2, 0, 4, 0, 2, 0],
-            [0, 1, 0, 2, 0, 4, 0, 2],
-            [2, 0, 1, 0, 2, 0, 4, 0],
-            [0, 2, 0, 1, 0, 2, 0, 4],
-        ], dtype=np.float64) / 36.0
+        material = MaterialProperties(
+            Emin  = self.fe_solver.Emin,
+            Emax  = self.fe_solver.Emax,
+            penal = self.fe_solver.penal,
+            E     = getattr(self.problem, "E",   205e9),
+            rho   = getattr(self.problem, "rho", 7850.0),
+        )
+        volume_element = getattr(self.problem, "volume_element", 1.0)
+        fem = FEM(self.fe_solver, material, ndof, volume_element)
 
-        KE      = self.fe_solver.KE
-        edofMat = self.fe_solver.edofMat
-        iK      = self.fe_solver.iK
-        jK      = self.fe_solver.jK
-        free    = self.fe_solver.free
-        penal   = self.fe_solver.penal
-        Emin    = self.fe_solver.Emin
-        Emax    = self.fe_solver.Emax
-        rho_min = 1e-2
-        rho_max = 1.0
+        KE      = fem.KE   # KE_unit * E  — physical stiffness
+        ME      = fem.ME   # ME_unit * rho * volume_element — same matrix used in compute_freq
+        edofMat = fem.edofMat
+        free    = fem.free
 
         # ------------------------------------------------------------------
         # Passive-region bookkeeping (mirrors min_compliance)
@@ -225,57 +392,49 @@ class TopOptSolver:
         loop   = 0
         obj    = 0.0
 
-        while change > self.tol and loop < self.max_iter:
+        while loop < self.max_iter and change > self.tol:
             loop += 1
 
-            # 1. from Flow Chart: FE solve + sensitivity analysis
-            # SIMP interpolation
-            Ee = Emin + xPhys**penal * (Emax - Emin)
-            re = rho_min + xPhys * (rho_max - rho_min)
+            xPhys_thresholded = xPhys.copy()
 
-            # Assemble global K and M via COO (same pattern as FESolver.solve)
-            sK = ((KE.flatten()[np.newaxis]).T * Ee).flatten(order="F")
-            sM = ((ME.flatten()[np.newaxis]).T * re).flatten(order="F")
-            K = coo_matrix((sK, (iK, jK)), shape=(ndof, ndof)).tocsr()
-            M = coo_matrix((sM, (iK, jK)), shape=(ndof, ndof)).tocsr()
+            # Assemble K, M and solve generalised EVP (bound formulation: k modes)
+            N_MODES   = 3
+            TOL_CLUSTER = 0.01   # modes within 1 % of beta are considered active
 
-            Kf = K[np.ix_(free, free)]
-            Mf = M[np.ix_(free, free)]
-
-            # Solve generalised eigenvalue problem for the first mode
-            try:
-                eigvals, eigvecs = eigsh(
-                    Kf, k=1, M=Mf, sigma=0.0, which="LM", tol=1e-8, maxiter=4000
-                )
-            except Exception:
+            freq_result = fem.compute_freq(xPhys_thresholded, k=N_MODES)
+            if freq_result is None:
                 continue
 
-            lam1   = float(np.real(eigvals[0]))
-            omega1 = float(np.sqrt(max(lam1, 0.0)))
+            beta   = freq_result.lam1          # lower bound on eigenvalues (= min λᵢ)
+            omega1 = freq_result.omega1         # √β — for reporting only
             obj    = omega1
 
-            # Computation of generalized gradients f_sk (from article OlhoffDu(2007))
-            # Sensitivity of lambda_1 w.r.t. physical density (adjoint)
-            v = np.real(eigvecs[:, 0])
-            norm_m = float(v @ (Mf @ v))
-            if norm_m > 1e-30:
-                v /= np.sqrt(norm_m)
+            # Identify active (clustered) modes: λᵢ ≤ (1 + tol) · β
+            active_mask = freq_result.eigvals <= (1.0 + TOL_CLUSTER) * beta
+            m_active    = int(active_mask.sum())
+            mu          = 1.0 / m_active        # equal weights (simple multiplicity)
 
-            phi        = np.zeros(ndof)
-            phi[free]  = v
-            pe         = phi[edofMat]          # (n_el, 8) — mode shape at element DOFs
+            # Bound-formulation sensitivity (OlhoffDu 2007):
+            #   ∂β/∂xₑ = Σᵢ μᵢ · (vᵢᵀ ∂K/∂xₑ vᵢ  −  λᵢ · vᵢᵀ ∂M/∂xₑ vᵢ)
+            dbeta_dx = np.zeros(n_el)
+            for i_mode in np.where(active_mask)[0]:
+                lam_i       = freq_result.eigvals[i_mode]
+                phi_i       = np.zeros(ndof)
+                phi_i[free] = freq_result.eigvecs[:, i_mode]
+                pe_i        = phi_i[edofMat]   # (n_el, 8)
+                dK_i = (
+                    material.penal * (material.Emax - material.Emin)
+                    * xPhys ** (material.penal - 1)
+                    * np.sum((pe_i @ KE) * pe_i, axis=1)
+                )
+                dM_i = (
+                    (material.rho_max - material.rho_min)
+                    * np.sum((pe_i @ ME) * pe_i, axis=1)
+                )
+                dbeta_dx += mu * (dK_i - lam_i * dM_i)
 
-            dKdx   = penal * (Emax - Emin) * xPhys**(penal - 1) * np.sum((pe @ KE) * pe, axis=1)
-            dMdx   = (rho_max - rho_min) * np.sum((pe @ ME) * pe, axis=1)
-            dlam_dx = dKdx - lam1 * dMdx
-
-            if omega1 > 1e-10:
-                domega_dx = dlam_dx / (2.0 * omega1)
-            else:
-                domega_dx = dlam_dx
-
-            # Negate: optimizer minimises, we maximise omega
-            dc = -domega_dx
+            # Negate: MMA minimises, we maximise beta
+            dc = -dbeta_dx
             dv = np.ones(n_el)
 
             dc, dv = self.filter.filter_sensitivities(x, dc, dv)
@@ -283,7 +442,7 @@ class TopOptSolver:
             if has_passive:
                 dc[passive_elems] = 0.0
                 dv[passive_elems] = 0.0
-            # 4. Update values of the design variables rho_e = rho_e + delta rho
+
             x_new, elapsed, *_ = self.optimizer.update(x, dc, dv, opt_volfrac)
 
             if has_passive:
@@ -292,7 +451,7 @@ class TopOptSolver:
             xPhys = self.filter.filter_design(x_new)
             if has_passive:
                 xPhys[passive_elems] = 1.0
-            #Stop criterion - if rho is converged ?
+
             if has_passive:
                 change = float(np.linalg.norm(x_new[active_elems] - x[active_elems], 2))
             else:

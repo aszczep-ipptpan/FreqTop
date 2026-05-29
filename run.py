@@ -56,7 +56,7 @@ from FreqTop.callbacks.logger    import ConsoleLogger
 from FreqTop.profiling import AlgorithmProfiler
 from FreqTop.profiling.instrumented import ProfiledFESolver, ProfiledOptimizer
 from FreqTop.callbacks.profiling_callback import ProfilingCallback
-from FreqTop.viz import TopOptPlotter, PlotterConfig, TOPOPT_SIMP_LATEX
+from FreqTop.viz import TopOptPlotter, PlotterConfig, TOPOPT_SIMP_LATEX, TOPOPT_FREQ_LATEX
 
 from FreqTop.config.loader import load_parameters, make_beam_domain
 
@@ -96,7 +96,7 @@ def run_single(
     """Run OC and SQP for one case, write outputs to output_dir, return (oc_summary, sqp_summary)."""
     results: dict[str, RunResult] = {}
 
-    for method in ["SQP", "OC"]:#resolve_methods("BOTH"):
+    for method in ["MMA", "SQP", "OC"]:#["OC", "SQP"]:#resolve_methods("BOTH"):
         print(f"\n{'-'*60}")
         suffix = f"  [{case_label}]" if case_label else ""
         print(f"  Running {method}{suffix}")
@@ -109,7 +109,7 @@ def run_single(
         profiled_fe  = ProfiledFESolver(fe, profiler)
         profiled_opt = ProfiledOptimizer(raw_opt, profiler)
         prof_cb      = ProfilingCallback(profiler, collect_density=True, collect_objective=True)
-        logger       = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac)
+        logger       = ConsoleLogger(nelx=nelx, nely=nely, volfrac=volfrac, problem_type=objective)
 
         solver = TopOptSolver(
             problem   = problem,
@@ -137,14 +137,16 @@ def run_single(
             hessian_used = method in HESSIAN_METHODS,
         )
 
+    _title_prefix = TOPOPT_FREQ_LATEX if objective == "max_frequency" else TOPOPT_SIMP_LATEX
     cfg = PlotterConfig(
         output_dir       = output_dir,
         dpi              = 100,
         animation_fps    = 5,
         animation_format = "gif",
-        title_prefix     = TOPOPT_SIMP_LATEX,
+        title_prefix     = _title_prefix,
         show_grid        = True,
         font_size        = 10,
+        problem_type     = objective,
     )
     plotter = TopOptPlotter(config=cfg, results=results, problem_label=problem_label)
     plotter.render_all(nelx=nelx, nely=nely)

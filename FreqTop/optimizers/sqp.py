@@ -49,6 +49,7 @@ Given t_k, lam_k, xi_k, eta_k:
 
 import numpy as np
 import time
+from scipy.optimize import minimize
 
 
 class SQPOptimizer:
@@ -136,52 +137,107 @@ class SQPOptimizer:
         self._xi  = None   # initialised on first call to update()
         self._eta = None
 
+        # L-BFGS state (Byrd et al. 1994 compact representation)
+        self._lbfgs_memory = 15
+        self._s_list: list = []   # displacement vectors s_k = x_k+1 - x_k
+        self._y_list: list = []   # gradient-difference vectors y_k = g_k+1 - g_k
+        self._lbfgs_xprev = None  # previous iterate
+        self._lbfgs_gprev = None  # previous Lagrangian gradient
+        self._B0_diag = None      # Fix P1: SIMP diagonal initial Hessian
+
     # =========================================================================
     # PUBLIC INTERFACE  (identical to OCOptimizer.update)
     # =========================================================================
 
     def update(self, x, dc, dv, volfrac):
-        """Compute the SQP update for the design variables.
+        """Compute one L-BFGS SQP step for the design variables.
 
         Parameters
         ----------
-        x       : current design variable vector
-        dc      : objective sensitivities
-        dv      : volume sensitivities (passive elements must be zeroed by caller)
-        volfrac : effective volume fraction target for the active elements
-                  (same value as passed to OCOptimizer.update)
-
-        The constraint residual g = sum(dv*x) - volfrac*sum(dv) is computed
-        internally, matching the convention used by the OC bisection.
+        x       : (n,) current design variables
+        dc      : (n,) objective sensitivities  (df0/dx)
+        dv      : (n,) volume sensitivities
+        volfrac : volume fraction target
         """
-        # Constraint residual: g < 0 means feasible, g > 0 means violated
-        g = float(np.dot(dv, x)) - volfrac * float(dv.sum())
+        start = time.thread_time()
 
-        start = time.perf_counter()
-        self._ensure_dual_variables(x)
-        #self._compute_kkt_residuals(x, dc, dv, g) #unused zbedny balast obliczeniowy
-        Bk, lo, hi = self._build_local_model(x, dc)
-        # === OC-like step ===
-        d_iq, lam_iq = self._solve_iqp(dc, dv, Bk, lo, hi, g)
-        xi_iq, eta_iq = self._recover_bound_multipliers(dc, dv, Bk, d_iq, lam_iq)
-        # === active set + correction ===
-        active = self._estimate_active_set(d_iq, lo, hi, dv, g)
-        d_eq, lam_eq = self._solve_eqp(dc, dv, Bk, d_iq, active, lam_iq)
-        beta = self._compute_contraction(d_iq, d_eq, lo, hi, dv, g, active)
-        d_cand = d_iq + beta * d_eq
-        # === merit & line search ===
-        d_final, alpha, lam_final = self._line_search(
-            x, d_iq, d_cand, dc, dv, Bk, g, lam_iq, lam_eq, xi_iq, eta_iq
+        # P1: SIMP-calibrated diagonal Hessian — gives Bk_i ~ (p-1)/x_i * |dc_i|
+        # so unconstrained step d_i = -dc_i/Bk_i ~ ±move for all elements.
+        # Use abs(dc) — not max(-dc,0) — so elements with dc>0 also get a
+        # finite Hessian; max(-dc,0) would leave them with Bk=EPS giving
+        # effectively linear objectives and causing all elements to hit move
+        # limits in the same direction (produces oscillation).
+        EPS = 1e-14
+        Bk_simp = (self.penal - 1.0) / np.maximum(x, EPS) * np.abs(dc)
+        Bk_simp = np.maximum(Bk_simp, EPS)
+        self._B0_diag = Bk_simp
+
+        # P3: normalize constraint to prevent n_el * rho_pen dominating Bk_simp.
+        # With dv = ones(n_el), dv_norm = sqrt(n_el), so the effective per-element
+        # constraint stiffness becomes rho_pen/n_el instead of rho_pen.
+        g      = float(np.dot(dv, x)) - volfrac * float(dv.sum())
+        dv_norm = float(np.linalg.norm(dv)) + 1e-300
+        fv      = np.array([g / dv_norm], dtype=np.float64)
+        A       = (dv / dv_norm).reshape(1, -1)
+
+        # Lagrangian gradient  dL/dx = dc + lam * dv
+        if not hasattr(self, "_lam") or self._lam is None:
+            self._lam = 0.0
+        g_lag = dc + float(self._lam) * dv
+
+        # L-BFGS curvature update (curvature computed from Lagrangian gradient)
+        if self._lbfgs_xprev is not None and self._lbfgs_gprev is not None:
+            s_new = x - self._lbfgs_xprev
+            y_new = g_lag - self._lbfgs_gprev
+            sy    = float(s_new @ y_new)
+            ss    = np.linalg.norm(s_new) * np.linalg.norm(y_new)
+            if sy > 1e-14 * (ss + 1e-300):
+                self._s_list.append(s_new.copy())
+                self._y_list.append(y_new.copy())
+                if len(self._s_list) > self._lbfgs_memory:
+                    self._s_list.pop(0)
+                    self._y_list.pop(0)
+
+        # Step bounds: move limit clipped to [0, 1]
+        xl = np.maximum(0.0, x - self.move)
+        xu = np.minimum(1.0, x + self.move)
+        dl = xl - x
+        du = xu - x
+
+        # P3: rho_pen calibrated to Hessian scale so constraint term ~ Bk_simp.
+        Bk_mean = float(np.mean(Bk_simp))
+        rho_pen = max(Bk_mean, 10.0 * abs(float(self._lam)) * Bk_mean + Bk_mean)
+
+        res = minimize(
+            lambda d: self._qp_obj(d, dc, fv, A, rho_pen),
+            np.zeros_like(x),
+            method="L-BFGS-B",
+            jac=True,
+            bounds=list(zip(dl, du)),
+            options={"maxiter": 3000, "ftol": 1e-45, "gtol": 1e-49},
         )
-        xnew = np.clip(x + d_final, 0.0, 1.0)
-        self._update_multipliers(alpha, lam_iq, xi_iq, eta_iq)
-        end = time.perf_counter()
+        d = res.x
+
+        xnew = np.clip(x + d, xl, xu)
+
+        # P2: standard augmented-Lagrangian multiplier update, consistent with
+        # the normalized QP subproblem (fv = g/dv_norm, A = dv/dv_norm):
+        #   dlam_norm = rho * cv_norm  =>  dlam_unnorm = rho * cv_unnorm / dv_norm^2
+        # This prevents the saw-tooth oscillation that occurs when cv_unnorm >> lam_scale:
+        # the update is now proportional to the actual constraint violation,
+        # keeping ||dlam*dv|| ~ ||delta_dc|| so L-BFGS y-vectors stay meaningful.
+        cv_unnorm = g + float(np.dot(dv, d))
+        dlam      = rho_pen * cv_unnorm / (dv_norm ** 2)
+        lam_scale = float(np.abs(dc).max()) / (float(np.abs(dv).mean()) + 1e-300)
+        self._lam = float(np.clip(self._lam + dlam, 0.0, 5.0 * lam_scale))
+
+        # Store state for next L-BFGS curvature pair
+        self._lbfgs_xprev = x.copy()
+        self._lbfgs_gprev = g_lag.copy()
+
+        end = time.thread_time()
         total_time = end - start
-        mem_mb = (
-            dc.nbytes + dv.nbytes + x.nbytes + xnew.nbytes +
-            eta_iq.nbytes + d_eq.nbytes + d_final.nbytes +
-            d_cand.nbytes + lo.nbytes + xi_iq.nbytes + Bk.nbytes
-        ) / 1024**2
+        mem_mb = (dc.nbytes + dv.nbytes + x.nbytes + xnew.nbytes) / 1024**2
         return xnew, total_time, mem_mb
     
 
@@ -339,6 +395,93 @@ class SQPOptimizer:
                           and comp <= self.comp_tol),
         }
 
+    # =========================================================================
+    # L-BFGS DIRECT-HESSIAN  (Byrd et al. 1994, compact representation)
+    # =========================================================================
+
+    def _lbfgs_sigma(self) -> float:
+        """Scaling factor for B_0 = sigma*I (safeguarded Barzilai-Borwein)."""
+        if not self._s_list:
+            return 1.0
+        sy = float(self._s_list[-1] @ self._y_list[-1])
+        yy = float(self._y_list[-1] @ self._y_list[-1])
+        return max(sy / yy, 1e-10) if yy > 1e-14 else 1.0
+
+    def _B_matvec(self, v: np.ndarray) -> np.ndarray:
+        """
+        Apply L-BFGS direct Hessian B_k to vector v.
+
+        Compact representation (Nocedal & Wright §7.2 / Byrd et al. 1994):
+
+            B_k = sigma*I - [sigma*S, Y] * M^{-1} * [sigma*S, Y]^T
+
+        where  S = [s_0,...,s_{k-1}],  Y = [y_0,...,y_{k-1}],
+               M = [[sigma * S^T S,  L ],
+                    [L^T,           -D ]]
+        with D = diag(s_i^T y_i) and L = strictly-lower part of S^T Y.
+
+        Cost: O(k*n + k^3), k = len(_s_list) <= _lbfgs_memory.
+        """
+        k = len(self._s_list)
+        if k == 0:
+            # P1: use SIMP diagonal when available, fall back to identity
+            if self._B0_diag is not None:
+                return self._B0_diag * v
+            return v.copy()
+
+        # P1: base scale from SIMP diagonal mean — keeps B_k in same magnitude
+        # as the element-wise Hessian rather than using the BB scalar sigma.
+        if self._B0_diag is not None:
+            sig = float(np.mean(self._B0_diag))
+        else:
+            sig = self._lbfgs_sigma()
+        sig = max(sig, 1e-30)
+
+        S   = np.column_stack(self._s_list)   # (n, k)
+        Y   = np.column_stack(self._y_list)   # (n, k)
+
+        StY = S.T @ Y
+        D   = np.diag(np.diag(StY))           # (k, k) diagonal
+        L   = np.tril(StY, -1)                # (k, k) strictly lower triangular
+
+        M = np.block([
+            [sig * (S.T @ S),  L  ],
+            [L.T,             -D  ],
+        ])   # (2k, 2k)
+
+        Wv = np.concatenate([sig * (S.T @ v), Y.T @ v])   # (2k,)
+
+        # P4: adaptive regularization scaled to M magnitude to prevent cancellation
+        reg = max(1e-10 * (float(np.abs(M).max()) + 1e-300), 1e-14)
+        try:
+            sol = np.linalg.solve(M + reg * np.eye(2 * k), Wv)
+        except np.linalg.LinAlgError:
+            # P4: fall back to SIMP diagonal on numerical failure
+            if self._B0_diag is not None:
+                return self._B0_diag * v
+            return sig * v
+
+        return sig * v - sig * (S @ sol[:k]) - Y @ sol[k:]
+
+    def _qp_obj(self, d: np.ndarray, g0: np.ndarray, fv: np.ndarray,
+                A: np.ndarray, rho_pen: float):
+        """
+        QP objective and gradient for the L-BFGS subproblem.
+
+            min  g0^T d + 1/2 d^T B d  +  rho_pen/2 * ||max(0, fv + A d)||^2
+            s.t. dl <= d <= du   (handled externally via L-BFGS-B bounds)
+
+        Returns (value, gradient) compatible with scipy.optimize.minimize jac=True.
+        """
+        Bd   = self._B_matvec(d)
+        val  = float(g0 @ d) + 0.5 * float(d @ Bd)
+        grad = g0 + Bd
+        cv   = fv + A @ d
+        viol = np.maximum(0.0, cv)
+        val  += 0.5 * rho_pen * float(viol @ viol)
+        grad  = grad + rho_pen * (A.T @ viol)
+        return val, grad
+
     def _ensure_dual_variables(self, x: np.ndarray):
         """Ensure dual variables (λ, ξ, η) are initialized and consistent.
 
@@ -370,7 +513,12 @@ class SQPOptimizer:
         self._eta = np.maximum(0.0, self._eta)
 
     def reset(self):
-        """Reset all persistent multiplier state (call before a new problem)."""
+        """Reset all persistent multiplier and L-BFGS state (call before a new problem)."""
         self._lam = 0.0
         self._xi  = None
         self._eta = None
+        self._s_list = []
+        self._y_list = []
+        self._lbfgs_xprev = None
+        self._lbfgs_gprev = None
+        self._B0_diag = None

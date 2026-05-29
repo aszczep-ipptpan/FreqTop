@@ -12,7 +12,7 @@
 
   "sweep": {
     "_comment": "Set enabled=true to loop over values. Each entry overrides parameters.json using dot-notation paths.",
-    "enabled": true,
+    "enabled": false,
     "values": [
       {"domain.mesh.nelx": 100,  "domain.mesh.nely": 10},
       {"domain.mesh.nelx": 200,  "domain.mesh.nely": 20}
@@ -25,7 +25,7 @@
 
   "plots": {
     "density": {
-      "enabled": true
+      "enabled": false
     },
     "convergence": {
       "enabled": true
@@ -34,25 +34,25 @@
       "enabled": true
     },
     "volume_fraction": {
-      "enabled": true
+      "enabled": false
     },
     "stage_breakdown": {
-      "enabled": true
+      "enabled": false
     },
     "change_vs_cumtime": {
-      "enabled": true
+      "enabled": false
     },
     "cumulative_time": {
-      "enabled": true
+      "enabled": false
     },
     "cumulative_memory": {
-      "enabled": true
+      "enabled": false
     },
     "obj_vs_cumtime": {
-      "enabled": true
+      "enabled": false
     },
     "comparison": {
-      "enabled": true
+      "enabled": false
     },
     "density_animation": {
       "enabled": true

@@ -29,10 +29,10 @@ class OCOptimizer(Optimizer):
         dv: np.ndarray,
         volfrac: float,
     ) -> np.ndarray:
-        start = time.perf_counter()
+        start = time.thread_time()
         g = float(np.dot(dv, x - volfrac))
         x_new, _ = self._find_lagrange_multiplier(x, dc, dv, g)
-        end = time.perf_counter()
+        end = time.thread_time()
         total_time = end - start
         mem_mb = (x.nbytes + x_new.nbytes + dc.nbytes + dv.nbytes) / 1024**2
         return x_new, total_time, mem_mb

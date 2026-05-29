@@ -25,6 +25,7 @@ from typing import Callable
 
 from FreqTop.optimizers.oc  import OCOptimizer
 from FreqTop.optimizers.sqp import SQPOptimizer
+from FreqTop.optimizers.mma import MMAOptimizer
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ from FreqTop.optimizers.sqp import SQPOptimizer
 OPTIMIZER_REGISTRY: dict[str, Callable] = {
     "OC":  lambda move, penal: OCOptimizer(move=move),
     "SQP": lambda move, penal: SQPOptimizer(move=move, penal=penal),
+    "MMA": lambda move, penal: MMAOptimizer(),
 }
 
 #: Methods that use a second-order (Hessian-based) update step.

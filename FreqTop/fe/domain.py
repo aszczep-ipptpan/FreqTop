@@ -295,6 +295,17 @@ class BeamDomain(MeshDomain):
             gamma    = float(mesh_p.get("FEM_massmatrix_gamma", 1.4)),
         )
 
+        # Physical material properties (read once, stored for downstream use)
+        mat_cfg    = params.get("materials", {}).get("base", {})
+        units      = params.get("meta", {}).get("units", {}).get("elastic_modulus", "")
+        self.E     = float(mat_cfg.get("E", 205.0))
+        if units == "GPa":
+            self.E *= 1e9
+        elif units == "MPa":
+            self.E *= 1e6
+        self.nu    = float(mat_cfg.get("nu", 0.3))
+        self.rho   = float(mat_cfg.get("rho", 7850.0))
+
         # List of (node_id, constraint_type) with constraint_type ∈ {"x","y","xy"}
         self._supports: list[tuple[int, str]] = []
 
