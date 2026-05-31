@@ -446,7 +446,7 @@ Controls all output paths, plots, CSV export, and figure styling. Read at startu
   },
 
   "output": {
-    "folder": "results_beam_clamped_test"   // output directory (created if absent)
+    "folder": "results_beam_clamped_testfont"   // output directory (created if absent)
   },
 
   "sweep": {

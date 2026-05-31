@@ -92,11 +92,14 @@ def run_single(
     problem_label: str,
     case_label: str = "",
     objective: str = "min_compliance",
+    length_x: float = 1.0,
+    length_y: float = 1.0,
+    style_cfg: dict | None = None,
 ) -> tuple[str, str]:
     """Run OC and SQP for one case, write outputs to output_dir, return (oc_summary, sqp_summary)."""
     results: dict[str, RunResult] = {}
 
-    for method in ["MMA", "SQP", "OC"]:#["OC", "SQP"]:#resolve_methods("BOTH"):
+    for method in ["MMA", "SQP"]:#["OC", "SQP"]:#resolve_methods("BOTH"):
         print(f"\n{'-'*60}")
         suffix = f"  [{case_label}]" if case_label else ""
         print(f"  Running {method}{suffix}")
@@ -138,22 +141,33 @@ def run_single(
         )
 
     _title_prefix = TOPOPT_FREQ_LATEX if objective == "max_frequency" else TOPOPT_SIMP_LATEX
+    _s = style_cfg or {}
     cfg = PlotterConfig(
         output_dir       = output_dir,
-        dpi              = 100,
-        animation_fps    = 5,
-        animation_format = "gif",
+        dpi              = _s.get("dpi",              100),
+        fig_size         = tuple(_s.get("fig_size",   [9.0, 5.5])),
+        animation_fps    = _s.get("animation_fps",    5),
+        animation_format = _s.get("animation_format", "gif"),
+        density_cmap     = _s.get("density_cmap",     "gray"),
         title_prefix     = _title_prefix,
-        show_grid        = True,
-        font_size        = 10,
+        show_grid        = _s.get("show_grid",         True),
+        font_size        = _s.get("font_size",         11),
+        title_font_size  = _s.get("title_font_size",   11),
+        label_font_size  = _s.get("label_font_size",   11),
+        tick_font_size   = _s.get("tick_font_size",    10),
+        cbar_font_size   = _s.get("cbar_font_size",    9),
+        font_family      = _s.get("font_family",       "Times New Roman"),
         problem_type     = objective,
     )
     plotter = TopOptPlotter(config=cfg, results=results, problem_label=problem_label)
-    plotter.render_all(nelx=nelx, nely=nely)
+    plotter.render_all(nelx=nelx, nely=nely, length_x=length_x, length_y=length_y)
 
     for m in results:
         if plotter.density_history.get(m):
-            plotter.animate_density(method=m, nelx=nelx, nely=nely, save=True)
+            plotter.animate_density(
+                method=m, nelx=nelx, nely=nely, save=True,
+                length_x=length_x, length_y=length_y,
+            )
     plotter.animate_cumulative_time(method=None, save=True)
 
     print(f"  Results saved to: {output_dir}/")
@@ -197,7 +211,7 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
     _penal      = float(_opt["penalization"])
     _ft         = 1 if _opt.get("filter_type", "density") == "heaviside" else 0
     _max_iter   = int(_opt["max_iters"])
-    _moves      = _swcfg.get("moves", [float(_opt.get("move", 0.8))])
+    _moves      = _swcfg.get("moves", [float(_opt.get("move_limit", _opt.get("move", 0.2)))])
     _tol_list   = _swcfg.get("tol",   [float(_opt["convergence_tol"])])
     _objective  = _opt.get("objective", "min_compliance")
     _SWEEP_MESHES = _swcfg.get("values")
@@ -243,6 +257,9 @@ def run_sweep() -> list[tuple[str, tuple | None]]:
                         problem_label = f"{case_name}  vf={_volfrac}  p={_penal}  move={move_val}",
                         case_label    = case_name,
                         objective     = _objective,
+                        length_x      = getattr(problem, "length_x", 1.0),
+                        length_y      = getattr(problem, "length_y", 1.0),
+                        style_cfg     = _out_cfg.get("style", {}),
                     )
                     results.append((case_name, summaries))
 
@@ -277,7 +294,7 @@ else:
     max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else int(opt_cfg["max_iters"])
     tol       = float(opt_cfg["convergence_tol"])
     mode      = sys.argv[1].upper() if len(sys.argv) > 1 else "BOTH"
-    move      = float(opt_cfg.get("move", 0.8))
+    move      = float(opt_cfg.get("move_limit", opt_cfg.get("move", 0.2)))
     objective = opt_cfg.get("objective", "min_compliance")
 
     problem_label = (
@@ -312,4 +329,7 @@ else:
         output_dir    = _output_folder,
         problem_label = problem_label,
         objective     = objective,
+        length_x      = domain.length_x,
+        length_y      = domain.length_y,
+        style_cfg     = _out_cfg.get("style", {}),
     )
