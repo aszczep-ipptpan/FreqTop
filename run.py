@@ -99,7 +99,7 @@ def run_single(
     """Run OC and SQP for one case, write outputs to output_dir, return (oc_summary, sqp_summary)."""
     results: dict[str, RunResult] = {}
 
-    for method in ["MMA", "SQP"]:#["OC", "SQP"]:#resolve_methods("BOTH"):
+    for method in ["SQP"]:#["OC", "SQP"]:#resolve_methods("BOTH"):
         print(f"\n{'-'*60}")
         suffix = f"  [{case_label}]" if case_label else ""
         print(f"  Running {method}{suffix}")
@@ -142,6 +142,12 @@ def run_single(
 
     _title_prefix = TOPOPT_FREQ_LATEX if objective == "max_frequency" else TOPOPT_SIMP_LATEX
     _s = style_cfg or {}
+    _plots = _out_cfg.get("plots", {})
+    _tol_values = (
+        _plots.get("change_vs_iteration", {}).get("tol_values")
+        or _plots.get("change_vs_cumtime", {}).get("tol_values")
+        or [1e-2, 1e-3, 1e-4]
+    )
     cfg = PlotterConfig(
         output_dir       = output_dir,
         dpi              = _s.get("dpi",              100),
@@ -151,13 +157,14 @@ def run_single(
         density_cmap     = _s.get("density_cmap",     "gray"),
         title_prefix     = _title_prefix,
         show_grid        = _s.get("show_grid",         True),
-        font_size        = _s.get("font_size",         11),
-        title_font_size  = _s.get("title_font_size",   11),
-        label_font_size  = _s.get("label_font_size",   11),
-        tick_font_size   = _s.get("tick_font_size",    10),
-        cbar_font_size   = _s.get("cbar_font_size",    9),
+        font_size        = _s.get("font_size",         31),
+        title_font_size  = _s.get("title_font_size",   31),
+        label_font_size  = _s.get("label_font_size",   31),
+        tick_font_size   = _s.get("tick_font_size",    30),
+        cbar_font_size   = _s.get("cbar_font_size",    39),
         font_family      = _s.get("font_family",       "Times New Roman"),
         problem_type     = objective,
+        tol_values       = [float(t) for t in _tol_values],
     )
     plotter = TopOptPlotter(config=cfg, results=results, problem_label=problem_label)
     plotter.render_all(nelx=nelx, nely=nely, length_x=length_x, length_y=length_y)

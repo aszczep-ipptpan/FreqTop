@@ -37,7 +37,7 @@ from FreqTop.optimizers.mma import MMAOptimizer
 OPTIMIZER_REGISTRY: dict[str, Callable] = {
     "OC":  lambda move, penal: OCOptimizer(move=move),
     "SQP": lambda move, penal: SQPOptimizer(move=move, penal=penal),
-    "MMA": lambda move, penal: MMAOptimizer(),
+    "MMA": lambda move, penal: MMAOptimizer(move=move),
 }
 
 #: Methods that use a second-order (Hessian-based) update step.

@@ -7,7 +7,7 @@
   },
 
   "output": {
-    "folder": "results_beam_clamped_test"
+    "folder": "results_beam_clamped_testfont"
   },
 
   "sweep": {
@@ -40,7 +40,13 @@
       "enabled": false
     },
     "change_vs_cumtime": {
-      "enabled": false
+      "enabled": true,
+      "_comment_tol": "Horizontal tolerance lines drawn on change_vs_cumtime and change_vs_iteration plots.",
+      "tol_values": [1e-2, 1e-3, 1e-4]
+    },
+    "change_vs_iteration": {
+      "enabled": true,
+      "tol_values": [1e-2, 1e-3, 1e-4]
     },
     "cumulative_time": {
       "enabled": false
@@ -85,7 +91,7 @@
     "fig_size":         [9.0, 5.5],
     "font_family":      "Times New Roman",
     "font_size":        11,
-    "title_font_size":  11,
+    "title_font_size":  28,
     "label_font_size":  13,
     "tick_font_size":   11,
     "cbar_font_size":   9,

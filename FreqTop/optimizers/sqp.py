@@ -7,7 +7,7 @@ optimisation — TopSQP algorithm.
 Drop-in replacement for OCOptimizer:
 
     from FreqTop.optimizers.sqp import SQPOptimizer
-    optimizer = SQPOptimizer(move=0.2, penal=3.0)
+    optimizer = SQPOptimizer(move=0.05, penal=3.0)
 
     solver = TopOptSolver(
         ...
@@ -63,7 +63,7 @@ class SQPOptimizer:
     This class is a drop-in replacement for OCOptimizer in the FreqTop
     repository.  The public interface is identical:
 
-        optimizer = SQPOptimizer(move=0.2, penal=3.0)
+        optimizer = SQPOptimizer(move=0.05, penal=3.0)
         xnew, g   = optimizer.update(x, dc, dv, g, volfrac)
 
     Parameters
@@ -73,6 +73,13 @@ class SQPOptimizer:
         Defines:  lo_i = max(0, t_i - move) - t_i  (lower bound on d_i)
                   hi_i = min(1, t_i + move) - t_i  (upper bound on d_i)
         Default: 0.2  (same as OCOptimizer).
+
+        **Key stability parameter for max_frequency problems.**
+        With move=0.2 (old default) the large per-iteration density swing can cause
+        eigenfrequency oscillations (non-monotonic growth).
+        Use move=0.05 to obtain smooth, monotonically increasing ω₁.
+        This is the single most effective knob for eliminating jumps.
+        The parameters_maxfrequency.json file already sets move_limit=0.05.
     penal : float
         SIMP penalisation exponent p.
         Used in the diagonal Hessian: Bk_i = (p-1)/t_i * (-dc_i).
@@ -105,7 +112,7 @@ class SQPOptimizer:
 
     def __init__(
         self,
-        move:       float = 0.2,
+        move:       float = 0.05,
         penal:      float = 3.0,
         stat_tol:   float = 1e-6,
         feas_tol:   float = 1e-8,
@@ -220,16 +227,21 @@ class SQPOptimizer:
 
         xnew = np.clip(x + d, xl, xu)
 
-        # P2: standard augmented-Lagrangian multiplier update, consistent with
-        # the normalized QP subproblem (fv = g/dv_norm, A = dv/dv_norm):
-        #   dlam_norm = rho * cv_norm  =>  dlam_unnorm = rho * cv_unnorm / dv_norm^2
-        # This prevents the saw-tooth oscillation that occurs when cv_unnorm >> lam_scale:
-        # the update is now proportional to the actual constraint violation,
-        # keeping ||dlam*dv|| ~ ||delta_dc|| so L-BFGS y-vectors stay meaningful.
-        cv_unnorm = g + float(np.dot(dv, d))
-        dlam      = rho_pen * cv_unnorm / (dv_norm ** 2)
-        lam_scale = float(np.abs(dc).max()) / (float(np.abs(dv).mean()) + 1e-300)
-        self._lam = float(np.clip(self._lam + dlam, 0.0, 5.0 * lam_scale))
+        # P2: standard augmented-Lagrangian multiplier update with exponential
+        # damping (α=0.4) to suppress sign-oscillation in cv_unnorm.
+        # In max_frequency runs the volume constraint is alternately slightly
+        # over/under, causing dlam to flip sign every iteration.  The damping
+        # keeps _lam from jumping, smoothing the L-BFGS y-vectors and
+        # reducing the "sawtooth" pattern in the change_vs_iteration plot.
+        # Normalized form: dlam = rho_pen * cv_unnorm / dv_norm^2
+        #   (prevents n_el * rho_pen from dominating the update scale)
+        _LAM_DAMP  = 0.4   # fraction of dlam applied each iteration
+        cv_unnorm  = g + float(np.dot(dv, d))
+        dlam       = rho_pen * cv_unnorm / (dv_norm ** 2)
+        lam_scale  = float(np.abs(dc).max()) / (float(np.abs(dv).mean()) + 1e-300)
+        self._lam  = float(np.clip(
+            self._lam + _LAM_DAMP * dlam, 0.0, 5.0 * lam_scale
+        ))
 
         # Store state for next L-BFGS curvature pair
         self._lbfgs_xprev = x.copy()

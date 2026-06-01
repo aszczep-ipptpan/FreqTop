@@ -1,5 +1,6 @@
 """FreqTop/solver.py — topology optimisation loop."""
 
+import contextlib
 from collections import namedtuple
 
 import numpy as np
@@ -314,11 +315,14 @@ class TopOptSolver:
             if has_passive:
                 xPhys[passive_elems] = 1.0
 
-            # Convergence measured on active elements only
+            # RMS convergence: ||Δx||₂ / √n — scale-independent across mesh sizes.
+            # Represents mean per-element displacement; less sensitive to isolated
+            # oscillating elements than pure L2 (which grows with √n_el).
             if has_passive:
-                change = float(np.linalg.norm(x_new[active_elems] - x[active_elems], 2))
+                _d = x_new[active_elems] - x[active_elems]
             else:
-                change = float(np.linalg.norm(x_new - x, 2))
+                _d = x_new - x
+            change = float(np.linalg.norm(_d) / np.sqrt(_d.size))
 
             x = x_new
 
@@ -388,6 +392,17 @@ class TopOptSolver:
         if has_passive:
             xPhys[passive_elems] = 1.0
 
+        # Profiler is stored on ProfiledFESolver._profiler.
+        # Plain FESolver has no _profiler, so getattr returns None.
+        # contextlib.nullcontext() is a no-op stand-in when not profiling.
+        _prof = getattr(self.fe_solver, '_profiler', None)
+
+        def _stage(name: str):
+            return _prof.stage(name) if _prof else contextlib.nullcontext()
+
+        N_MODES     = 3
+        TOL_CLUSTER = 0.01   # modes within 1 % of beta are considered active
+
         change = float("inf")
         loop   = 0
         obj    = 0.0
@@ -397,65 +412,68 @@ class TopOptSolver:
 
             xPhys_thresholded = xPhys.copy()
 
-            # Assemble K, M and solve generalised EVP (bound formulation: k modes)
-            N_MODES   = 3
-            TOL_CLUSTER = 0.01   # modes within 1 % of beta are considered active
-
-            freq_result = fem.compute_freq(xPhys_thresholded, k=N_MODES)
+            # ── Stage 1: EVP solve (K/M assembly + eigsh) ─────────────────────
+            with _stage("fe_solve"):
+                freq_result = fem.compute_freq(xPhys_thresholded, k=N_MODES)
             if freq_result is None:
                 continue
 
-            beta   = freq_result.lam1          # lower bound on eigenvalues (= min λᵢ)
-            omega1 = freq_result.omega1         # √β — for reporting only
+            beta   = freq_result.lam1
+            omega1 = freq_result.omega1
             obj    = omega1
 
-            # Identify active (clustered) modes: λᵢ ≤ (1 + tol) · β
             active_mask = freq_result.eigvals <= (1.0 + TOL_CLUSTER) * beta
             m_active    = int(active_mask.sum())
-            mu          = 1.0 / m_active        # equal weights (simple multiplicity)
+            mu          = 1.0 / m_active
 
+            # ── Stage 2: sensitivity analysis ─────────────────────────────────
             # Bound-formulation sensitivity (OlhoffDu 2007):
             #   ∂β/∂xₑ = Σᵢ μᵢ · (vᵢᵀ ∂K/∂xₑ vᵢ  −  λᵢ · vᵢᵀ ∂M/∂xₑ vᵢ)
-            dbeta_dx = np.zeros(n_el)
-            for i_mode in np.where(active_mask)[0]:
-                lam_i       = freq_result.eigvals[i_mode]
-                phi_i       = np.zeros(ndof)
-                phi_i[free] = freq_result.eigvecs[:, i_mode]
-                pe_i        = phi_i[edofMat]   # (n_el, 8)
-                dK_i = (
-                    material.penal * (material.Emax - material.Emin)
-                    * xPhys ** (material.penal - 1)
-                    * np.sum((pe_i @ KE) * pe_i, axis=1)
-                )
-                dM_i = (
-                    (material.rho_max - material.rho_min)
-                    * np.sum((pe_i @ ME) * pe_i, axis=1)
-                )
-                dbeta_dx += mu * (dK_i - lam_i * dM_i)
+            with _stage("sensitivities"):
+                dbeta_dx = np.zeros(n_el)
+                for i_mode in np.where(active_mask)[0]:
+                    lam_i       = freq_result.eigvals[i_mode]
+                    phi_i       = np.zeros(ndof)
+                    phi_i[free] = freq_result.eigvecs[:, i_mode]
+                    pe_i        = phi_i[edofMat]   # (n_el, 8)
+                    dK_i = (
+                        material.penal * (material.Emax - material.Emin)
+                        * xPhys ** (material.penal - 1)
+                        * np.sum((pe_i @ KE) * pe_i, axis=1)
+                    )
+                    dM_i = (
+                        (material.rho_max - material.rho_min)
+                        * np.sum((pe_i @ ME) * pe_i, axis=1)
+                    )
+                    dbeta_dx += mu * (dK_i - lam_i * dM_i)
 
-            # Negate: MMA minimises, we maximise beta
-            dc = -dbeta_dx
-            dv = np.ones(n_el)
+                dc = -dbeta_dx
+                dv = np.ones(n_el)
 
-            dc, dv = self.filter.filter_sensitivities(x, dc, dv)
+            # ── Stage 3: sensitivity filter ────────────────────────────────────
+            with _stage("filter_sens"):
+                dc, dv = self.filter.filter_sensitivities(x, dc, dv)
+                if has_passive:
+                    dc[passive_elems] = 0.0
+                    dv[passive_elems] = 0.0
 
-            if has_passive:
-                dc[passive_elems] = 0.0
-                dv[passive_elems] = 0.0
-
+            # ── Stage 4: optimizer update (timed inside ProfiledOptimizer) ────
             x_new, elapsed, *_ = self.optimizer.update(x, dc, dv, opt_volfrac)
 
-            if has_passive:
-                x_new = self.problem.correct_design_variable(x_new, self.volfrac)
+            # ── Stage 5: density filter → new xPhys ───────────────────────────
+            with _stage("filter_dens"):
+                if has_passive:
+                    x_new = self.problem.correct_design_variable(x_new, self.volfrac)
+                xPhys = self.filter.filter_design(x_new)
+                if has_passive:
+                    xPhys[passive_elems] = 1.0
 
-            xPhys = self.filter.filter_design(x_new)
+            # RMS convergence (same formula as min_compliance)
             if has_passive:
-                xPhys[passive_elems] = 1.0
-
-            if has_passive:
-                change = float(np.linalg.norm(x_new[active_elems] - x[active_elems], 2))
+                _d = x_new[active_elems] - x[active_elems]
             else:
-                change = float(np.linalg.norm(x_new - x, 2))
+                _d = x_new - x
+            change = float(np.linalg.norm(_d) / np.sqrt(_d.size))
 
             x = x_new
 
